@@ -1,0 +1,15 @@
+.dart_tool
+.git
+.idea
+.venv
+__pycache__
+*.py[cod]
+.env
+build
+coverage
+android
+ios
+linux
+macos
+windows
+test
