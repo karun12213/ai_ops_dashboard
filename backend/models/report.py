@@ -26,13 +26,23 @@ class ReportLocation(Base):
             "length(currency_code) = 3",
             name="ck_report_locations_currency_code_length",
         ),
-        UniqueConstraint("name", name="uq_report_locations_name"),
+        UniqueConstraint(
+            "workspace_id",
+            "name",
+            name="uq_report_locations_workspace_name",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         Uuid(as_uuid=True),
         primary_key=True,
         default=uuid.uuid4,
+    )
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     currency_code: Mapped[str] = mapped_column(String(3), nullable=False)

@@ -17,6 +17,7 @@ from backend.models.dashboard import DashboardActivity, DashboardDailySnapshot, 
 from backend.models.refresh_session import RefreshSession
 from backend.models.report import ReportDailySales, ReportLocation
 from backend.models.user import User
+from backend.models.workspace import Workspace, WorkspaceMembership
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -51,6 +52,8 @@ class FreshDatabaseTests(unittest.TestCase):
         assert "report_locations" in tables
         assert "report_daily_sales" in tables
         assert "audio_uploads" in tables
+        assert "workspaces" in tables
+        assert "workspace_memberships" in tables
 
     def test_alembic_upgrade_builds_complete_fresh_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -75,6 +78,21 @@ class FreshDatabaseTests(unittest.TestCase):
                 tuple(index["column_names"])
                 for index in inspector.get_indexes("audio_uploads")
             }
+            membership_foreign_keys = inspector.get_foreign_keys("workspace_memberships")
+            membership_indexes = {
+                tuple(index["column_names"])
+                for index in inspector.get_indexes("workspace_memberships")
+            }
+            location_columns = {
+                column["name"] for column in inspector.get_columns("report_locations")
+            }
+            snapshot_columns = {
+                column["name"]
+                for column in inspector.get_columns("dashboard_daily_snapshots")
+            }
+            activity_columns = {
+                column["name"] for column in inspector.get_columns("dashboard_activities")
+            }
             with engine.connect() as connection:
                 version = connection.execute(
                     sa.text("SELECT version_num FROM alembic_version")
@@ -93,6 +111,8 @@ class FreshDatabaseTests(unittest.TestCase):
                 "report_daily_sales",
                 "report_locations",
                 "users",
+                "workspace_memberships",
+                "workspaces",
             },
         )
         self.assertEqual(
@@ -123,7 +143,15 @@ class FreshDatabaseTests(unittest.TestCase):
             any(foreign_key["referred_table"] == "users" for foreign_key in audio_foreign_keys)
         )
         self.assertIn(("owner_id", "created_at"), audio_indexes)
-        self.assertEqual(version, "20260803_04")
+        self.assertEqual(
+            {foreign_key["referred_table"] for foreign_key in membership_foreign_keys},
+            {"users", "workspaces"},
+        )
+        self.assertIn(("user_id", "workspace_id"), membership_indexes)
+        self.assertIn("workspace_id", location_columns)
+        self.assertIn("location_id", snapshot_columns)
+        self.assertIn("location_id", activity_columns)
+        self.assertEqual(version, "20260803_05")
 
 
 class PreMigrationDatabaseTests(unittest.TestCase):
@@ -179,6 +207,8 @@ class PreMigrationDatabaseTests(unittest.TestCase):
         self.assertIn("report_locations", tables)
         self.assertIn("report_daily_sales", tables)
         self.assertIn("audio_uploads", tables)
+        self.assertIn("workspaces", tables)
+        self.assertIn("workspace_memberships", tables)
         self.assertIn("users", tables)
         self.assertEqual(row.email, "existing-operator@example.com")
         self.assertTrue(row.hashed_password.startswith("$argon2id$"))
@@ -204,6 +234,8 @@ class PreMigrationDatabaseTests(unittest.TestCase):
         self.assertNotIn("report_locations", tables)
         self.assertNotIn("report_daily_sales", tables)
         self.assertNotIn("audio_uploads", tables)
+        self.assertNotIn("workspaces", tables)
+        self.assertNotIn("workspace_memberships", tables)
         self.assertIn("users", tables)
         self.assertEqual(row.email, "existing-operator@example.com")
 
@@ -257,7 +289,7 @@ class CreateAllDatabaseAdoptionTests(unittest.TestCase):
         self.assertEqual(str(session_row.id), refresh_session_id.hex)
         self.assertEqual(str(session_row.user_id), user_id.hex)
         self.assertEqual(session_row.token_hash, original_token_hash)
-        self.assertEqual(version, "20260803_04")
+        self.assertEqual(version, "20260803_05")
 
     @staticmethod
     async def _create_existing_database(

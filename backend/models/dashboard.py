@@ -9,6 +9,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -42,10 +43,20 @@ class DashboardDailySnapshot(Base):
         CheckConstraint("pickup_capacity >= 0", name="ck_dashboard_pickup_capacity_nonnegative"),
         CheckConstraint("staff_on_shift >= 0", name="ck_dashboard_staff_on_shift_nonnegative"),
         CheckConstraint("staff_scheduled >= 0", name="ck_dashboard_staff_scheduled_nonnegative"),
-        UniqueConstraint("service_date", name="uq_dashboard_daily_snapshots_service_date"),
+        UniqueConstraint(
+            "location_id",
+            "service_date",
+            name="uq_dashboard_daily_snapshots_location_date",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    location_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("report_locations.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     service_date: Mapped[date] = mapped_column(Date, nullable=False)
     currency_code: Mapped[str] = mapped_column(String(3), nullable=False, default="INR")
     net_sales_minor: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -100,8 +111,20 @@ class DashboardActivity(Base):
     """Operator-facing event shown in the Dashboard activity feed."""
 
     __tablename__ = "dashboard_activities"
+    __table_args__ = (
+        Index(
+            "ix_dashboard_activities_location_date",
+            "location_id",
+            "service_date",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    location_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("report_locations.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     service_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     title: Mapped[str] = mapped_column(String(160), nullable=False)

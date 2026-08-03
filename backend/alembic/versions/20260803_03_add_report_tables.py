@@ -124,7 +124,18 @@ def upgrade() -> None:
 
     if "report_locations" not in existing_tables:
         _create_locations()
-    elif not _has_unique_key(inspector, "report_locations", ["name"]):
+    elif not (
+        _has_unique_key(inspector, "report_locations", ["name"])
+        or (
+            "workspace_id"
+            in {column["name"] for column in inspector.get_columns("report_locations")}
+            and _has_unique_key(
+                inspector,
+                "report_locations",
+                ["workspace_id", "name"],
+            )
+        )
+    ):
         raise RuntimeError(
             "Existing report_locations table is incompatible with the Reports "
             "migration; name must be unique"
@@ -173,4 +184,3 @@ def downgrade() -> None:
     )
     op.drop_table("report_daily_sales")
     op.drop_table("report_locations")
-

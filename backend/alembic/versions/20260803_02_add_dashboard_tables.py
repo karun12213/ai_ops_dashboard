@@ -207,10 +207,21 @@ def upgrade() -> None:
 
     if "dashboard_daily_snapshots" not in existing_tables:
         _create_daily_snapshots()
-    elif not _has_unique_key(
-        inspector,
-        "dashboard_daily_snapshots",
-        ["service_date"],
+    elif not (
+        _has_unique_key(
+            inspector,
+            "dashboard_daily_snapshots",
+            ["service_date"],
+        )
+        or (
+            "location_id"
+            in {column["name"] for column in inspector.get_columns("dashboard_daily_snapshots")}
+            and _has_unique_key(
+                inspector,
+                "dashboard_daily_snapshots",
+                ["location_id", "service_date"],
+            )
+        )
     ):
         raise RuntimeError(
             "Existing dashboard_daily_snapshots table is incompatible with the "

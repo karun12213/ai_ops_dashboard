@@ -14,6 +14,8 @@ from backend.models import (  # noqa: F401  (register tables on Base.metadata)
     ReportDailySales,
     ReportLocation,
     User,
+    Workspace,
+    WorkspaceMembership,
 )
 from backend.utils.config import get_settings
 
