@@ -5,18 +5,20 @@ class StatCard extends StatelessWidget {
     super.key,
     required this.label,
     required this.value,
-    required this.change,
     required this.icon,
     required this.color,
-    this.positive = true,
+    this.change,
+    this.changeIsIncrease = true,
+    this.changeIsFavorable = true,
   });
 
   final String label;
   final String value;
-  final String change;
+  final String? change;
   final IconData icon;
   final Color color;
-  final bool positive;
+  final bool changeIsIncrease;
+  final bool changeIsFavorable;
 
   @override
   Widget build(BuildContext context) {
@@ -39,21 +41,29 @@ class StatCard extends StatelessWidget {
                   child: Icon(icon, color: color, size: 22),
                 ),
                 const Spacer(),
-                Icon(
-                  positive
-                      ? Icons.trending_up_rounded
-                      : Icons.trending_down_rounded,
-                  color: positive ? scheme.primary : scheme.error,
-                  size: 18,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  change,
-                  style: TextStyle(
-                    color: positive ? scheme.primary : scheme.error,
-                    fontWeight: FontWeight.w600,
+                if (change != null) ...[
+                  Icon(
+                    changeIsIncrease
+                        ? Icons.trending_up_rounded
+                        : Icons.trending_down_rounded,
+                    color: changeIsFavorable ? scheme.primary : scheme.error,
+                    size: 18,
                   ),
-                ),
+                  const SizedBox(width: 4),
+                  Text(
+                    change!,
+                    style: TextStyle(
+                      color: changeIsFavorable ? scheme.primary : scheme.error,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ] else
+                  Text(
+                    'No comparison',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
               ],
             ),
             const SizedBox(height: 20),

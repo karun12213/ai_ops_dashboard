@@ -3,9 +3,12 @@ import 'dart:async';
 import 'package:ai_ops_dashboard/app.dart';
 import 'package:ai_ops_dashboard/models/user.dart';
 import 'package:ai_ops_dashboard/providers/auth_provider.dart';
+import 'package:ai_ops_dashboard/providers/dashboard_provider.dart';
 import 'package:ai_ops_dashboard/screens/login_screen.dart';
 import 'package:ai_ops_dashboard/services/api_client.dart';
 import 'package:ai_ops_dashboard/services/auth_service.dart';
+import 'package:ai_ops_dashboard/services/dashboard_service.dart';
+import 'package:ai_ops_dashboard/models/dashboard_data.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -190,6 +193,9 @@ Future<void> _pumpLoginApp(WidgetTester tester, AuthService authService) async {
     ProviderScope(
       overrides: [
         authProvider.overrideWith((ref) => AuthNotifier(authService)),
+        dashboardServiceProvider.overrideWith(
+          (ref) => _EmptyDashboardService(),
+        ),
       ],
       child: const RestaurantOpsApp(),
     ),
@@ -197,4 +203,15 @@ Future<void> _pumpLoginApp(WidgetTester tester, AuthService authService) async {
   await tester.pumpAndSettle();
 
   expect(find.byType(LoginScreen), findsOneWidget);
+}
+
+class _EmptyDashboardService implements DashboardService {
+  @override
+  Future<DashboardData> fetch(DateTime serviceDate) async {
+    return DashboardData(
+      serviceDate: serviceDate,
+      snapshot: null,
+      recentActivity: const [],
+    );
+  }
 }
