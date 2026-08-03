@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:http/http.dart' as http;
 
@@ -14,6 +15,13 @@ class ApiException implements Exception {
 
   @override
   String toString() => message;
+}
+
+class ApiDownloadResponse {
+  const ApiDownloadResponse({required this.bytes, required this.filename});
+
+  final Uint8List bytes;
+  final String? filename;
 }
 
 class ApiClient {
@@ -61,6 +69,36 @@ class ApiClient {
         ),
       );
       return _decode(response);
+    } on TimeoutException {
+      throw const ApiException('The API did not respond in time.');
+    } on http.ClientException {
+      throw const ApiException('Unable to reach the API.');
+    }
+  }
+
+  Future<ApiDownloadResponse> download(
+    String path, {
+    bool authenticated = true,
+  }) async {
+    try {
+      final response = await _sendWithAuthRetry(
+        authenticated: authenticated,
+        send: (headers) => _client.get(
+          _uri(path),
+          headers: {...headers, 'Accept': 'text/csv'},
+        ),
+      );
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        _decode(response);
+        throw ApiException(
+          'The request could not be completed.',
+          statusCode: response.statusCode,
+        );
+      }
+      return ApiDownloadResponse(
+        bytes: response.bodyBytes,
+        filename: _responseFilename(response.headers['content-disposition']),
+      );
     } on TimeoutException {
       throw const ApiException('The API did not respond in time.');
     } on http.ClientException {
@@ -184,5 +222,14 @@ class ApiClient {
       throw ApiException(message, statusCode: response.statusCode);
     }
     return payload;
+  }
+
+  static String? _responseFilename(String? contentDisposition) {
+    if (contentDisposition == null) return null;
+    final match = RegExp(
+      r'filename="([^"]+)"',
+      caseSensitive: false,
+    ).firstMatch(contentDisposition);
+    return match?.group(1);
   }
 }
