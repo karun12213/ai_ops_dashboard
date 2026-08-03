@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./backend/restaurant_ops.db"
     auto_create_tables: Optional[bool] = None
 
+    audio_local_storage_path: str = "./backend/audio_uploads"
+    audio_max_upload_bytes: int = Field(default=100 * 1024 * 1024, ge=1, le=100 * 1024 * 1024)
+
     # Development bootstrap account. Its values must come from the environment;
     # production always ignores the seed flag, even if it is set accidentally.
     seed_default_admin: bool = False

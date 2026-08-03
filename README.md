@@ -5,7 +5,7 @@ A production-oriented foundation for a restaurant operations platform. The repos
 ## What is included
 
 - Flutter Web with Material 3, Riverpod, GoRouter, responsive drawer/navigation rail, dark theme, and authenticated route guards
-- Login, dashboard, reports, audio selection, and settings screens
+- Login, dashboard, reports, authenticated audio uploads, and settings screens
 - FastAPI with async PostgreSQL access, user registration, login, token refresh, current-user, liveness, and database-readiness APIs
 - Argon2 password hashing and short-lived access plus refresh JWTs
 - Docker images, Docker Compose, Nginx SPA/proxy configuration, environment template, and Railway config-as-code
@@ -135,11 +135,22 @@ flutter build web --release --dart-define=API_BASE_URL=https://api.example.com/a
 | `POST` | `/api/v1/auth/logout` | Revoke the presented authenticated refresh session |
 | `GET` | `/api/v1/auth/me` | Return the authenticated operator |
 | `GET` | `/api/v1/dashboard?service_date=YYYY-MM-DD` | Return the authenticated daily Dashboard snapshot and recent activity |
+| `POST` | `/api/v1/audio-uploads` | Validate and store authenticated multipart audio |
+| `GET` | `/api/v1/audio-uploads?limit=50` | List the authenticated operator's upload history |
+| `GET` | `/api/v1/audio-uploads/{id}/download` | Download an owned, ready audio object |
+| `DELETE` | `/api/v1/audio-uploads/{id}` | Delete owned audio metadata and content |
 
 Dashboard responses are sourced from the date-scoped
 `dashboard_daily_snapshots`, `dashboard_hourly_sales`, and
 `dashboard_activities` tables. Dates without stored operational data return a
 successful empty payload; the API does not manufacture demo metrics.
+
+Audio uploads support MP3, WAV, M4A, AAC, and OGG files up to 100 MiB. The API
+streams the file through a byte-signature validator and stores it under a
+server-generated private key. `AUDIO_LOCAL_STORAGE_PATH` must point to durable,
+non-public storage. The included Compose configuration mounts a named volume;
+multi-replica production deployments should replace the local storage adapter
+with shared S3-compatible object storage and configure a real malware scanner.
 
 ## Production configuration
 
@@ -153,6 +164,7 @@ reuse revokes the user's other active refresh sessions. For a hardened public
 deployment, prefer a same-origin backend-for-frontend using Secure, HttpOnly,
 SameSite cookies so browser scripts cannot read session credentials.
 
-## Deliberate Task 1 boundary
+## Audio module boundary
 
-The audio page only validates local file selection. It does not upload, transcribe, analyze, or call any AI service. Those capabilities belong to a later task.
+The audio module stores and retrieves validated files only. It does not
+transcribe, summarize, analyze, or call an AI service.

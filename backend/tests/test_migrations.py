@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from backend.auth.security import hash_password
 from backend.database.base import Base
+from backend.models.audio_upload import AudioUpload
 from backend.models.dashboard import DashboardActivity, DashboardDailySnapshot, DashboardHourlySales
 from backend.models.refresh_session import RefreshSession
 from backend.models.report import ReportDailySales, ReportLocation
@@ -49,6 +50,7 @@ class FreshDatabaseTests(unittest.TestCase):
         assert "dashboard_activities" in tables
         assert "report_locations" in tables
         assert "report_daily_sales" in tables
+        assert "audio_uploads" in tables
 
     def test_alembic_upgrade_builds_complete_fresh_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -68,6 +70,11 @@ class FreshDatabaseTests(unittest.TestCase):
                 tuple(index["column_names"])
                 for index in inspector.get_indexes("report_daily_sales")
             }
+            audio_foreign_keys = inspector.get_foreign_keys("audio_uploads")
+            audio_indexes = {
+                tuple(index["column_names"])
+                for index in inspector.get_indexes("audio_uploads")
+            }
             with engine.connect() as connection:
                 version = connection.execute(
                     sa.text("SELECT version_num FROM alembic_version")
@@ -78,6 +85,7 @@ class FreshDatabaseTests(unittest.TestCase):
             tables,
             {
                 "alembic_version",
+                "audio_uploads",
                 "dashboard_activities",
                 "dashboard_daily_snapshots",
                 "dashboard_hourly_sales",
@@ -111,7 +119,11 @@ class FreshDatabaseTests(unittest.TestCase):
         )
         self.assertIn(("service_date",), report_indexes)
         self.assertIn(("location_id", "service_date"), report_indexes)
-        self.assertEqual(version, "20260803_03")
+        self.assertTrue(
+            any(foreign_key["referred_table"] == "users" for foreign_key in audio_foreign_keys)
+        )
+        self.assertIn(("owner_id", "created_at"), audio_indexes)
+        self.assertEqual(version, "20260803_04")
 
 
 class PreMigrationDatabaseTests(unittest.TestCase):
@@ -166,6 +178,7 @@ class PreMigrationDatabaseTests(unittest.TestCase):
         self.assertIn("dashboard_activities", tables)
         self.assertIn("report_locations", tables)
         self.assertIn("report_daily_sales", tables)
+        self.assertIn("audio_uploads", tables)
         self.assertIn("users", tables)
         self.assertEqual(row.email, "existing-operator@example.com")
         self.assertTrue(row.hashed_password.startswith("$argon2id$"))
@@ -190,6 +203,7 @@ class PreMigrationDatabaseTests(unittest.TestCase):
         self.assertNotIn("dashboard_activities", tables)
         self.assertNotIn("report_locations", tables)
         self.assertNotIn("report_daily_sales", tables)
+        self.assertNotIn("audio_uploads", tables)
         self.assertIn("users", tables)
         self.assertEqual(row.email, "existing-operator@example.com")
 
@@ -243,7 +257,7 @@ class CreateAllDatabaseAdoptionTests(unittest.TestCase):
         self.assertEqual(str(session_row.id), refresh_session_id.hex)
         self.assertEqual(str(session_row.user_id), user_id.hex)
         self.assertEqual(session_row.token_hash, original_token_hash)
-        self.assertEqual(version, "20260803_03")
+        self.assertEqual(version, "20260803_04")
 
     @staticmethod
     async def _create_existing_database(

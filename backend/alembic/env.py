@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 
 from backend.database.base import Base
 from backend.models import (  # noqa: F401  (register tables on Base.metadata)
+    AudioUpload,
     DashboardActivity,
     DashboardDailySnapshot,
     DashboardHourlySales,
