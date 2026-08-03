@@ -5,7 +5,15 @@ from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from backend.database.base import Base
-from backend.models import RefreshSession, User  # noqa: F401  (register tables on Base.metadata)
+from backend.models import (  # noqa: F401  (register tables on Base.metadata)
+    DashboardActivity,
+    DashboardDailySnapshot,
+    DashboardHourlySales,
+    RefreshSession,
+    ReportDailySales,
+    ReportLocation,
+    User,
+)
 from backend.utils.config import get_settings
 
 config = context.config

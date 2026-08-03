@@ -14,6 +14,7 @@ from backend.auth.security import hash_password
 from backend.database.base import Base
 from backend.models.dashboard import DashboardActivity, DashboardDailySnapshot, DashboardHourlySales
 from backend.models.refresh_session import RefreshSession
+from backend.models.report import ReportDailySales, ReportLocation
 from backend.models.user import User
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -46,6 +47,8 @@ class FreshDatabaseTests(unittest.TestCase):
         assert "dashboard_daily_snapshots" in tables
         assert "dashboard_hourly_sales" in tables
         assert "dashboard_activities" in tables
+        assert "report_locations" in tables
+        assert "report_daily_sales" in tables
 
     def test_alembic_upgrade_builds_complete_fresh_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -60,6 +63,11 @@ class FreshDatabaseTests(unittest.TestCase):
             tables = set(inspector.get_table_names())
             user_columns = {column["name"] for column in inspector.get_columns("users")}
             refresh_foreign_keys = inspector.get_foreign_keys("refresh_sessions")
+            report_foreign_keys = inspector.get_foreign_keys("report_daily_sales")
+            report_indexes = {
+                tuple(index["column_names"])
+                for index in inspector.get_indexes("report_daily_sales")
+            }
             with engine.connect() as connection:
                 version = connection.execute(
                     sa.text("SELECT version_num FROM alembic_version")
@@ -74,6 +82,8 @@ class FreshDatabaseTests(unittest.TestCase):
                 "dashboard_daily_snapshots",
                 "dashboard_hourly_sales",
                 "refresh_sessions",
+                "report_daily_sales",
+                "report_locations",
                 "users",
             },
         )
@@ -93,7 +103,15 @@ class FreshDatabaseTests(unittest.TestCase):
         self.assertTrue(
             any(foreign_key["referred_table"] == "users" for foreign_key in refresh_foreign_keys)
         )
-        self.assertEqual(version, "20260803_02")
+        self.assertTrue(
+            any(
+                foreign_key["referred_table"] == "report_locations"
+                for foreign_key in report_foreign_keys
+            )
+        )
+        self.assertIn(("service_date",), report_indexes)
+        self.assertIn(("location_id", "service_date"), report_indexes)
+        self.assertEqual(version, "20260803_03")
 
 
 class PreMigrationDatabaseTests(unittest.TestCase):
@@ -146,6 +164,8 @@ class PreMigrationDatabaseTests(unittest.TestCase):
         self.assertIn("dashboard_daily_snapshots", tables)
         self.assertIn("dashboard_hourly_sales", tables)
         self.assertIn("dashboard_activities", tables)
+        self.assertIn("report_locations", tables)
+        self.assertIn("report_daily_sales", tables)
         self.assertIn("users", tables)
         self.assertEqual(row.email, "existing-operator@example.com")
         self.assertTrue(row.hashed_password.startswith("$argon2id$"))
@@ -168,6 +188,8 @@ class PreMigrationDatabaseTests(unittest.TestCase):
         self.assertNotIn("dashboard_daily_snapshots", tables)
         self.assertNotIn("dashboard_hourly_sales", tables)
         self.assertNotIn("dashboard_activities", tables)
+        self.assertNotIn("report_locations", tables)
+        self.assertNotIn("report_daily_sales", tables)
         self.assertIn("users", tables)
         self.assertEqual(row.email, "existing-operator@example.com")
 
@@ -221,7 +243,7 @@ class CreateAllDatabaseAdoptionTests(unittest.TestCase):
         self.assertEqual(str(session_row.id), refresh_session_id.hex)
         self.assertEqual(str(session_row.user_id), user_id.hex)
         self.assertEqual(session_row.token_hash, original_token_hash)
-        self.assertEqual(version, "20260803_02")
+        self.assertEqual(version, "20260803_03")
 
     @staticmethod
     async def _create_existing_database(

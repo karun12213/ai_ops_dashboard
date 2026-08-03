@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from backend.auth.security import hash_password, verify_password
 from backend.database.base import Base
 from backend.database.session import AsyncSessionLocal, engine
-from backend.models.user import User
+from backend.models import User
 from backend.utils.config import Settings, get_settings
 
 logger = logging.getLogger(__name__)

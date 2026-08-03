@@ -4,7 +4,7 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api.routes import auth, dashboard, health
+from backend.api.routes import auth, dashboard, health, reports
 from backend.database.init_db import init_db
 from backend.middleware.security_headers import SecurityHeadersMiddleware
 from backend.utils.config import get_settings
@@ -41,6 +41,7 @@ app.add_middleware(
 app.include_router(health.router, prefix=settings.api_v1_prefix)
 app.include_router(auth.router, prefix=settings.api_v1_prefix)
 app.include_router(dashboard.router, prefix=settings.api_v1_prefix)
+app.include_router(reports.router, prefix=settings.api_v1_prefix)
 
 
 @app.get("/health", tags=["system"], summary="Container liveness probe")
