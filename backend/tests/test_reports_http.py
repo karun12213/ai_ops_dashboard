@@ -17,6 +17,7 @@ from backend.database.session import get_db
 from backend.main import app
 from backend.models.report import ReportDailySales, ReportLocation
 from backend.models.user import User
+from backend.models.workspace import Workspace, WorkspaceMembership
 
 
 class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
@@ -39,9 +40,37 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
                 hashed_password=hash_password("ReportsTestPassword123!"),
                 is_active=True,
             )
-            session.add(self.user)
+            self.other_user = User(
+                email="other-reports-operator@example.com",
+                full_name="Other Reports Operator",
+                hashed_password=hash_password("ReportsTestPassword123!"),
+                is_active=True,
+            )
+            session.add_all([self.user, self.other_user])
+            await session.flush()
+            self.workspace = Workspace(name="Reports Workspace")
+            self.other_workspace = Workspace(name="Other Reports Workspace")
+            session.add_all([self.workspace, self.other_workspace])
+            await session.flush()
+            session.add_all(
+                [
+                    WorkspaceMembership(
+                        workspace_id=self.workspace.id,
+                        user_id=self.user.id,
+                        role="owner",
+                    ),
+                    WorkspaceMembership(
+                        workspace_id=self.other_workspace.id,
+                        user_id=self.other_user.id,
+                        role="owner",
+                    ),
+                ]
+            )
             await session.commit()
             await session.refresh(self.user)
+            await session.refresh(self.other_user)
+            await session.refresh(self.workspace)
+            await session.refresh(self.other_workspace)
 
         async def override_database() -> AsyncIterator[AsyncSession]:
             async with self.session_factory() as session:
@@ -53,6 +82,9 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
             base_url="http://testserver",
         )
         self.headers = {"Authorization": f"Bearer {create_access_token(str(self.user.id))}"}
+        self.other_headers = {
+            "Authorization": f"Bearer {create_access_token(str(self.other_user.id))}"
+        }
 
     async def asyncTearDown(self) -> None:
         await self.client.aclose()
@@ -61,7 +93,7 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
         self.temp_directory.cleanup()
 
     async def test_reports_and_csv_require_authentication(self) -> None:
-        params = {"start_date": "2026-07-03", "end_date": "2026-07-04"}
+        params = self._params()
 
         report_response = await self.client.get("/api/v1/reports", params=params)
         export_response = await self.client.get("/api/v1/reports/export.csv", params=params)
@@ -72,7 +104,7 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
     async def test_report_returns_an_exact_empty_contract(self) -> None:
         response = await self.client.get(
             "/api/v1/reports",
-            params={"start_date": "2026-07-03", "end_date": "2026-07-04"},
+            params=self._params(),
             headers=self.headers,
         )
 
@@ -101,7 +133,7 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
 
         response = await self.client.get(
             "/api/v1/reports",
-            params={"start_date": "2026-07-03", "end_date": "2026-07-04"},
+            params=self._params(),
             headers=self.headers,
         )
 
@@ -187,8 +219,7 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
         response = await self.client.get(
             "/api/v1/reports",
             params={
-                "start_date": "2026-07-03",
-                "end_date": "2026-07-04",
+                **self._params(),
                 "location_id": str(powai_id),
             },
             headers=self.headers,
@@ -203,12 +234,69 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(payload["location_performance"]), 1)
         self.assertEqual(payload["location_performance"][0]["location_name"], "Powai")
 
+    async def test_report_and_csv_are_isolated_between_tenants(self) -> None:
+        await self._seed_performance_data()
+        async with self.session_factory() as session:
+            other_location = ReportLocation(
+                workspace_id=self.other_workspace.id,
+                name="Other Tenant Location",
+                currency_code="INR",
+            )
+            legacy_location = ReportLocation(
+                workspace_id=None,
+                name="Unowned Legacy Location",
+                currency_code="INR",
+            )
+            session.add_all([other_location, legacy_location])
+            await session.flush()
+            session.add_all(
+                [
+                    ReportDailySales(
+                        service_date=date(2026, 7, 3),
+                        location_id=other_location.id,
+                        channel="delivery",
+                        net_sales_minor=777777,
+                        order_count=7,
+                    ),
+                    ReportDailySales(
+                        service_date=date(2026, 7, 3),
+                        location_id=legacy_location.id,
+                        channel="delivery",
+                        net_sales_minor=888888,
+                        order_count=8,
+                    ),
+                ]
+            )
+            await session.commit()
+
+        owner_report = await self.client.get(
+            "/api/v1/reports",
+            params=self._params(),
+            headers=self.headers,
+        )
+        outsider_report = await self.client.get(
+            "/api/v1/reports",
+            params=self._params(),
+            headers=self.other_headers,
+        )
+        outsider_csv = await self.client.get(
+            "/api/v1/reports/export.csv",
+            params=self._params(),
+            headers=self.other_headers,
+        )
+
+        self.assertEqual(owner_report.status_code, 200)
+        self.assertEqual(owner_report.json()["totals"]["revenue_total_minor"], 50000)
+        self.assertNotIn("Other Tenant Location", owner_report.text)
+        self.assertNotIn("Unowned Legacy Location", owner_report.text)
+        self.assertEqual(outsider_report.status_code, 404)
+        self.assertEqual(outsider_csv.status_code, 404)
+
     async def test_report_rejects_unknown_location_and_mixed_currencies(self) -> None:
         unknown_response = await self.client.get(
             "/api/v1/reports",
             params={
-                "start_date": "2026-07-03",
-                "end_date": "2026-07-04",
+                **self._params(),
                 "location_id": str(uuid.uuid4()),
             },
             headers=self.headers,
@@ -216,8 +304,16 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(unknown_response.status_code, 404)
 
         async with self.session_factory() as session:
-            inr = ReportLocation(name="INR Location", currency_code="INR")
-            usd = ReportLocation(name="USD Location", currency_code="USD")
+            inr = ReportLocation(
+                workspace_id=self.workspace.id,
+                name="INR Location",
+                currency_code="INR",
+            )
+            usd = ReportLocation(
+                workspace_id=self.workspace.id,
+                name="USD Location",
+                currency_code="USD",
+            )
             session.add_all([inr, usd])
             await session.flush()
             session.add_all(
@@ -242,7 +338,7 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
 
         mixed_response = await self.client.get(
             "/api/v1/reports",
-            params={"start_date": "2026-07-03", "end_date": "2026-07-04"},
+            params=self._params(),
             headers=self.headers,
         )
         self.assertEqual(mixed_response.status_code, 409)
@@ -255,12 +351,20 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
         for path in ("/api/v1/reports", "/api/v1/reports/export.csv"):
             for params in invalid_ranges:
                 with self.subTest(path=path, params=params):
-                    response = await self.client.get(path, params=params, headers=self.headers)
+                    response = await self.client.get(
+                        path,
+                        params={**params, "workspace_id": str(self.workspace.id)},
+                        headers=self.headers,
+                    )
                     self.assertEqual(response.status_code, 422)
 
     async def test_csv_has_safe_headers_fields_filename_and_spreadsheet_text(self) -> None:
         async with self.session_factory() as session:
-            location = ReportLocation(name="=Unsafe Location", currency_code="inr")
+            location = ReportLocation(
+                workspace_id=self.workspace.id,
+                name="=Unsafe Location",
+                currency_code="inr",
+            )
             session.add(location)
             await session.flush()
             session.add(
@@ -276,7 +380,7 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
 
         response = await self.client.get(
             "/api/v1/reports/export.csv",
-            params={"start_date": "2026-07-03", "end_date": "2026-07-04"},
+            params=self._params(),
             headers=self.headers,
         )
 
@@ -313,7 +417,7 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
         with patch("backend.services.report_service.CSV_MAX_ROWS", 1):
             response = await self.client.get(
                 "/api/v1/reports/export.csv",
-                params={"start_date": "2026-07-03", "end_date": "2026-07-04"},
+                params=self._params(),
                 headers=self.headers,
             )
 
@@ -322,8 +426,16 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
 
     async def _seed_performance_data(self) -> tuple[uuid.UUID, uuid.UUID]:
         async with self.session_factory() as session:
-            bandra = ReportLocation(name="Bandra", currency_code="inr")
-            powai = ReportLocation(name="Powai", currency_code="INR")
+            bandra = ReportLocation(
+                workspace_id=self.workspace.id,
+                name="Bandra",
+                currency_code="inr",
+            )
+            powai = ReportLocation(
+                workspace_id=self.workspace.id,
+                name="Powai",
+                currency_code="INR",
+            )
             session.add_all([bandra, powai])
             await session.flush()
             session.add_all(
@@ -382,7 +494,13 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
             await session.commit()
             return bandra.id, powai.id
 
+    def _params(self) -> dict[str, str]:
+        return {
+            "workspace_id": str(self.workspace.id),
+            "start_date": "2026-07-03",
+            "end_date": "2026-07-04",
+        }
+
 
 if __name__ == "__main__":
     unittest.main()
-

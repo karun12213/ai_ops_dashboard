@@ -49,17 +49,26 @@ class ReportService:
         *,
         start_date: date,
         end_date: date,
+        workspace_id: uuid.UUID,
         location_id: uuid.UUID | None,
     ) -> ReportResponse:
         locations = list(
             (
                 await self._session.scalars(
-                    select(ReportLocation).order_by(ReportLocation.name, ReportLocation.id)
+                    select(ReportLocation)
+                    .where(ReportLocation.workspace_id == workspace_id)
+                    .order_by(ReportLocation.name, ReportLocation.id)
                 )
             ).all()
         )
         selected_location = self._selected_location(locations, location_id)
-        filters = self._sales_filters(start_date, end_date, location_id)
+        allowed_location_ids = [location.id for location in locations]
+        filters = self._sales_filters(
+            start_date,
+            end_date,
+            allowed_location_ids,
+            location_id,
+        )
 
         revenue_total, order_total = (
             await self._session.execute(
@@ -131,6 +140,7 @@ class ReportService:
         previous_filters = self._sales_filters(
             start_date - timedelta(days=period_days),
             start_date - timedelta(days=1),
+            allowed_location_ids,
             location_id,
         )
         previous_rows = (
@@ -205,11 +215,25 @@ class ReportService:
         *,
         start_date: date,
         end_date: date,
+        workspace_id: uuid.UUID,
         location_id: uuid.UUID | None,
     ) -> bytes:
-        locations = list((await self._session.scalars(select(ReportLocation))).all())
+        locations = list(
+            (
+                await self._session.scalars(
+                    select(ReportLocation).where(
+                        ReportLocation.workspace_id == workspace_id
+                    )
+                )
+            ).all()
+        )
         self._selected_location(locations, location_id)
-        filters = self._sales_filters(start_date, end_date, location_id)
+        filters = self._sales_filters(
+            start_date,
+            end_date,
+            [location.id for location in locations],
+            location_id,
+        )
         rows = (
             await self._session.execute(
                 select(
@@ -266,11 +290,13 @@ class ReportService:
     def _sales_filters(
         start_date: date,
         end_date: date,
+        allowed_location_ids: list[uuid.UUID],
         location_id: uuid.UUID | None,
     ) -> list:
         filters = [
             ReportDailySales.service_date >= start_date,
             ReportDailySales.service_date <= end_date,
+            ReportDailySales.location_id.in_(allowed_location_ids),
         ]
         if location_id is not None:
             filters.append(ReportDailySales.location_id == location_id)

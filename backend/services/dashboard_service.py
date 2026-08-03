@@ -1,3 +1,4 @@
+import uuid
 from datetime import date
 
 from sqlalchemy import select
@@ -24,18 +25,28 @@ class DashboardService:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def get(self, service_date: date, *, activity_limit: int) -> DashboardResponse:
+    async def get(
+        self,
+        service_date: date,
+        *,
+        location_id: uuid.UUID,
+        activity_limit: int,
+    ) -> DashboardResponse:
         """Return the snapshot and newest activity for ``service_date``."""
         snapshot = await self._session.scalar(
             select(DashboardDailySnapshot).where(
-                DashboardDailySnapshot.service_date == service_date
+                DashboardDailySnapshot.service_date == service_date,
+                DashboardDailySnapshot.location_id == location_id,
             )
         )
         activities = list(
             (
                 await self._session.scalars(
                     select(DashboardActivity)
-                    .where(DashboardActivity.service_date == service_date)
+                    .where(
+                        DashboardActivity.service_date == service_date,
+                        DashboardActivity.location_id == location_id,
+                    )
                     .order_by(DashboardActivity.occurred_at.desc(), DashboardActivity.id.desc())
                     .limit(activity_limit)
                 )

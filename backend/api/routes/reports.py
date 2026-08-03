@@ -14,6 +14,7 @@ from backend.services.report_service import (
     ReportService,
     UnknownReportLocationError,
 )
+from backend.services.workspace_service import WorkspaceNotFoundError, WorkspaceService
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -22,20 +23,34 @@ MAX_REPORT_RANGE_DAYS = 366
 
 @router.get("", response_model=ReportResponse, summary="Get a sales performance report")
 async def report(
-    _: CurrentUser,
+    current_user: CurrentUser,
     start_date: Annotated[date, Query(description="Inclusive range start")],
     end_date: Annotated[date, Query(description="Inclusive range end")],
+    workspace_id: Annotated[uuid.UUID, Query()],
     location_id: Annotated[uuid.UUID | None, Query()] = None,
     session: AsyncSession = Depends(get_db),
 ) -> ReportResponse:
     _validate_range(start_date, end_date)
     try:
+        workspace_service = WorkspaceService(session)
+        if location_id is None:
+            await workspace_service.require_membership(
+                user_id=current_user.id,
+                workspace_id=workspace_id,
+            )
+        else:
+            await workspace_service.require_location(
+                user_id=current_user.id,
+                workspace_id=workspace_id,
+                location_id=location_id,
+            )
         return await ReportService(session).get(
             start_date=start_date,
             end_date=end_date,
+            workspace_id=workspace_id,
             location_id=location_id,
         )
-    except UnknownReportLocationError:
+    except (UnknownReportLocationError, WorkspaceNotFoundError):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
     except MixedReportCurrencyError:
         raise HTTPException(
@@ -46,20 +61,34 @@ async def report(
 
 @router.get("/export.csv", summary="Export sales performance rows as CSV")
 async def export_report_csv(
-    _: CurrentUser,
+    current_user: CurrentUser,
     start_date: Annotated[date, Query(description="Inclusive range start")],
     end_date: Annotated[date, Query(description="Inclusive range end")],
+    workspace_id: Annotated[uuid.UUID, Query()],
     location_id: Annotated[uuid.UUID | None, Query()] = None,
     session: AsyncSession = Depends(get_db),
 ) -> Response:
     _validate_range(start_date, end_date)
     try:
+        workspace_service = WorkspaceService(session)
+        if location_id is None:
+            await workspace_service.require_membership(
+                user_id=current_user.id,
+                workspace_id=workspace_id,
+            )
+        else:
+            await workspace_service.require_location(
+                user_id=current_user.id,
+                workspace_id=workspace_id,
+                location_id=location_id,
+            )
         content = await ReportService(session).export_csv(
             start_date=start_date,
             end_date=end_date,
+            workspace_id=workspace_id,
             location_id=location_id,
         )
-    except UnknownReportLocationError:
+    except (UnknownReportLocationError, WorkspaceNotFoundError):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Location not found")
     except ReportCsvRowLimitError:
         raise HTTPException(
@@ -89,4 +118,3 @@ def _validate_range(start_date: date, end_date: date) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Date range cannot exceed {MAX_REPORT_RANGE_DAYS} days",
         )
-
