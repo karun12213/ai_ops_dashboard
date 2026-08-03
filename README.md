@@ -134,6 +134,12 @@ flutter build web --release --dart-define=API_BASE_URL=https://api.example.com/a
 | `POST` | `/api/v1/auth/refresh` | Rotate the presented refresh token into a new token pair |
 | `POST` | `/api/v1/auth/logout` | Revoke the presented authenticated refresh session |
 | `GET` | `/api/v1/auth/me` | Return the authenticated operator |
+| `GET` | `/api/v1/dashboard?service_date=YYYY-MM-DD` | Return the authenticated daily Dashboard snapshot and recent activity |
+
+Dashboard responses are sourced from the date-scoped
+`dashboard_daily_snapshots`, `dashboard_hourly_sales`, and
+`dashboard_activities` tables. Dates without stored operational data return a
+successful empty payload; the API does not manufacture demo metrics.
 
 ## Production configuration
 

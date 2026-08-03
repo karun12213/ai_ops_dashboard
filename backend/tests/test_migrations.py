@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 
 from backend.auth.security import hash_password
 from backend.database.base import Base
+from backend.models.dashboard import DashboardActivity, DashboardDailySnapshot, DashboardHourlySales
 from backend.models.refresh_session import RefreshSession
 from backend.models.user import User
 
@@ -25,7 +26,7 @@ def _alembic_config(database_url: str) -> Config:
 
 
 class FreshDatabaseTests(unittest.TestCase):
-    def test_create_all_registers_refresh_sessions(self) -> None:
+    def test_create_all_registers_current_application_tables(self) -> None:
         asyncio.run(self._create_all_and_check())
 
     @staticmethod
@@ -42,6 +43,9 @@ class FreshDatabaseTests(unittest.TestCase):
 
         assert "users" in tables
         assert "refresh_sessions" in tables
+        assert "dashboard_daily_snapshots" in tables
+        assert "dashboard_hourly_sales" in tables
+        assert "dashboard_activities" in tables
 
     def test_alembic_upgrade_builds_complete_fresh_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -64,7 +68,14 @@ class FreshDatabaseTests(unittest.TestCase):
 
         self.assertEqual(
             tables,
-            {"alembic_version", "refresh_sessions", "users"},
+            {
+                "alembic_version",
+                "dashboard_activities",
+                "dashboard_daily_snapshots",
+                "dashboard_hourly_sales",
+                "refresh_sessions",
+                "users",
+            },
         )
         self.assertEqual(
             user_columns,
@@ -82,7 +93,7 @@ class FreshDatabaseTests(unittest.TestCase):
         self.assertTrue(
             any(foreign_key["referred_table"] == "users" for foreign_key in refresh_foreign_keys)
         )
-        self.assertEqual(version, "20260802_01")
+        self.assertEqual(version, "20260803_02")
 
 
 class PreMigrationDatabaseTests(unittest.TestCase):
@@ -132,6 +143,9 @@ class PreMigrationDatabaseTests(unittest.TestCase):
         engine.dispose()
 
         self.assertIn("refresh_sessions", tables)
+        self.assertIn("dashboard_daily_snapshots", tables)
+        self.assertIn("dashboard_hourly_sales", tables)
+        self.assertIn("dashboard_activities", tables)
         self.assertIn("users", tables)
         self.assertEqual(row.email, "existing-operator@example.com")
         self.assertTrue(row.hashed_password.startswith("$argon2id$"))
@@ -151,6 +165,9 @@ class PreMigrationDatabaseTests(unittest.TestCase):
         engine.dispose()
 
         self.assertNotIn("refresh_sessions", tables)
+        self.assertNotIn("dashboard_daily_snapshots", tables)
+        self.assertNotIn("dashboard_hourly_sales", tables)
+        self.assertNotIn("dashboard_activities", tables)
         self.assertIn("users", tables)
         self.assertEqual(row.email, "existing-operator@example.com")
 
@@ -204,7 +221,7 @@ class CreateAllDatabaseAdoptionTests(unittest.TestCase):
         self.assertEqual(str(session_row.id), refresh_session_id.hex)
         self.assertEqual(str(session_row.user_id), user_id.hex)
         self.assertEqual(session_row.token_hash, original_token_hash)
-        self.assertEqual(version, "20260802_01")
+        self.assertEqual(version, "20260803_02")
 
     @staticmethod
     async def _create_existing_database(
