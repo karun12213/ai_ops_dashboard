@@ -100,10 +100,10 @@ void main() {
     );
 
     await expectLater(
-      AuthService(apiClient, tokenStorage).login(
-        email: 'operator@example.com',
-        password: 'example-password',
-      ),
+      AuthService(
+        apiClient,
+        tokenStorage,
+      ).login(email: 'operator@example.com', password: 'example-password'),
       throwsA(isA<InvalidCredentialsException>()),
     );
   });
@@ -136,10 +136,10 @@ void main() {
     );
 
     await expectLater(
-      AuthService(apiClient, tokenStorage).login(
-        email: 'operator@example.com',
-        password: 'example-password',
-      ),
+      AuthService(
+        apiClient,
+        tokenStorage,
+      ).login(email: 'operator@example.com', password: 'example-password'),
       throwsA(
         isA<ApiException>().having(
           (error) => error.statusCode,
@@ -151,6 +151,216 @@ void main() {
     expect(await tokenStorage.getAccessToken(), isNull);
     expect(await tokenStorage.getRefreshToken(), isNull);
   });
+
+  test(
+    'refreshes an expired access token and retries the request once',
+    () async {
+      final tokenStorage = _MemoryTokenStorage()
+        .._accessToken = 'expired-access-token'
+        .._refreshToken = 'original-refresh-token';
+      var profileRequests = 0;
+      var refreshRequests = 0;
+      final apiClient = ApiClient(
+        client: MockClient((request) async {
+          if (request.url.path.endsWith('/auth/refresh')) {
+            refreshRequests += 1;
+            expect(request.headers['authorization'], isNull);
+            expect(
+              jsonDecode(request.body),
+              equals({'refresh_token': 'original-refresh-token'}),
+            );
+            return http.Response(
+              jsonEncode({
+                'access_token': 'rotated-access-token',
+                'refresh_token': 'rotated-refresh-token',
+                'token_type': 'bearer',
+                'expires_in': 1800,
+              }),
+              200,
+            );
+          }
+
+          profileRequests += 1;
+          if (request.headers['authorization'] ==
+              'Bearer expired-access-token') {
+            return http.Response(jsonEncode({'detail': 'expired'}), 401);
+          }
+          expect(
+            request.headers['authorization'],
+            'Bearer rotated-access-token',
+          );
+          return http.Response(
+            jsonEncode({
+              'id': 'user-id',
+              'email': 'operator@example.com',
+              'full_name': 'Test Operator',
+              'is_active': true,
+              'is_superuser': false,
+            }),
+            200,
+          );
+        }),
+        tokenStorage: tokenStorage,
+      );
+
+      final user = await AuthService(apiClient, tokenStorage).currentUser();
+
+      expect(user.email, 'operator@example.com');
+      expect(profileRequests, 2);
+      expect(refreshRequests, 1);
+      expect(await tokenStorage.getAccessToken(), 'rotated-access-token');
+      expect(await tokenStorage.getRefreshToken(), 'rotated-refresh-token');
+    },
+  );
+
+  test(
+    'shares one refresh across simultaneous authenticated requests',
+    () async {
+      final tokenStorage = _MemoryTokenStorage()
+        .._accessToken = 'expired-access-token'
+        .._refreshToken = 'original-refresh-token';
+      var refreshRequests = 0;
+      var protectedRequests = 0;
+      final apiClient = ApiClient(
+        client: MockClient((request) async {
+          if (request.url.path.endsWith('/auth/refresh')) {
+            refreshRequests += 1;
+            await Future<void>.delayed(const Duration(milliseconds: 40));
+            return http.Response(
+              jsonEncode({
+                'access_token': 'rotated-access-token',
+                'refresh_token': 'rotated-refresh-token',
+                'expires_in': 1800,
+              }),
+              200,
+            );
+          }
+
+          protectedRequests += 1;
+          if (request.headers['authorization'] ==
+              'Bearer expired-access-token') {
+            return http.Response(jsonEncode({'detail': 'expired'}), 401);
+          }
+          expect(
+            request.headers['authorization'],
+            'Bearer rotated-access-token',
+          );
+          return http.Response(jsonEncode({'ok': true}), 200);
+        }),
+        tokenStorage: tokenStorage,
+      );
+
+      final results = await Future.wait([
+        apiClient.get('/protected'),
+        apiClient.get('/protected'),
+      ]);
+
+      expect(results, everyElement(equals({'ok': true})));
+      expect(protectedRequests, 4);
+      expect(refreshRequests, 1);
+    },
+  );
+
+  test('restores a session when only a refresh token is available', () async {
+    final tokenStorage = _MemoryTokenStorage()
+      .._refreshToken = 'saved-refresh-token';
+    var refreshRequests = 0;
+    final apiClient = ApiClient(
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('/auth/refresh')) {
+          refreshRequests += 1;
+          return http.Response(
+            jsonEncode({
+              'access_token': 'restored-access-token',
+              'refresh_token': 'restored-refresh-token',
+              'expires_in': 1800,
+            }),
+            200,
+          );
+        }
+        expect(
+          request.headers['authorization'],
+          'Bearer restored-access-token',
+        );
+        return http.Response(
+          jsonEncode({
+            'id': 'user-id',
+            'email': 'operator@example.com',
+            'full_name': 'Test Operator',
+            'is_active': true,
+            'is_superuser': false,
+          }),
+          200,
+        );
+      }),
+      tokenStorage: tokenStorage,
+    );
+
+    final user = await AuthService(apiClient, tokenStorage).restoreSession();
+
+    expect(user?.email, 'operator@example.com');
+    expect(refreshRequests, 1);
+    expect(await tokenStorage.getAccessToken(), 'restored-access-token');
+  });
+
+  test('clears the session only when refresh fails', () async {
+    final tokenStorage = _MemoryTokenStorage()
+      .._accessToken = 'expired-access-token'
+      .._refreshToken = 'rejected-refresh-token';
+    var protectedRequests = 0;
+    var refreshRequests = 0;
+    final apiClient = ApiClient(
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('/auth/refresh')) {
+          refreshRequests += 1;
+          return http.Response(jsonEncode({'detail': 'invalid'}), 401);
+        }
+        protectedRequests += 1;
+        return http.Response(jsonEncode({'detail': 'expired'}), 401);
+      }),
+      tokenStorage: tokenStorage,
+    );
+
+    await expectLater(
+      apiClient.get('/protected'),
+      throwsA(
+        isA<ApiException>().having(
+          (error) => error.statusCode,
+          'statusCode',
+          401,
+        ),
+      ),
+    );
+
+    expect(protectedRequests, 1);
+    expect(refreshRequests, 1);
+    expect(await tokenStorage.getAccessToken(), isNull);
+    expect(await tokenStorage.getRefreshToken(), isNull);
+  });
+
+  test(
+    'does not discard tokens for a non-authentication server error',
+    () async {
+      final tokenStorage = _MemoryTokenStorage()
+        .._accessToken = 'valid-access-token'
+        .._refreshToken = 'valid-refresh-token';
+      final apiClient = ApiClient(
+        client: MockClient(
+          (_) async =>
+              http.Response(jsonEncode({'detail': 'unavailable'}), 503),
+        ),
+        tokenStorage: tokenStorage,
+      );
+
+      await expectLater(
+        apiClient.get('/protected'),
+        throwsA(isA<ApiException>()),
+      );
+
+      expect(await tokenStorage.getAccessToken(), 'valid-access-token');
+      expect(await tokenStorage.getRefreshToken(), 'valid-refresh-token');
+    },
+  );
 }
 
 class _MemoryTokenStorage extends TokenStorage {

@@ -1,5 +1,6 @@
+import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import jwt
 from jwt import InvalidTokenError
@@ -23,7 +24,12 @@ def verify_password(password: str, hashed_password: str) -> bool:
     return password_hash.verify(password, hashed_password)
 
 
-def create_token(subject: str, token_type: str, expires_delta: timedelta) -> str:
+def create_token(
+    subject: str,
+    token_type: str,
+    expires_delta: timedelta,
+    extra_claims: Optional[Dict[str, Any]] = None,
+) -> str:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": subject,
@@ -31,22 +37,21 @@ def create_token(subject: str, token_type: str, expires_delta: timedelta) -> str
         "iat": now,
         "exp": now + expires_delta,
     }
+    if extra_claims:
+        payload.update(extra_claims)
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 
 def create_access_token(subject: str) -> str:
-    return create_token(
-        subject,
-        "access",
-        timedelta(minutes=settings.access_token_expire_minutes),
-    )
+    return create_token(subject, "access", timedelta(minutes=settings.access_token_expire_minutes))
 
 
-def create_refresh_token(subject: str) -> str:
+def create_refresh_token(subject: str, jti: uuid.UUID) -> str:
     return create_token(
         subject,
         "refresh",
         timedelta(days=settings.refresh_token_expire_days),
+        extra_claims={"jti": str(jti)},
     )
 
 

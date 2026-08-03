@@ -2,12 +2,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.api.routes.auth import login, me
 from backend.api.schemas.auth import LoginRequest
+from backend.auth.rate_limit import reset_rate_limits
 from backend.auth.security import hash_password, verify_password
 from backend.database.base import Base
 from backend.database.init_db import seed_default_admin
@@ -15,8 +16,13 @@ from backend.models.user import User
 from backend.utils.config import Settings
 
 
+def _fake_request(ip: str = "203.0.113.5") -> Request:
+    return Request(scope={"type": "http", "client": (ip, 12345), "headers": []})
+
+
 class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
+        await reset_rate_limits()
         self.temp_directory = tempfile.TemporaryDirectory()
         database_path = Path(self.temp_directory.name) / "auth-test.db"
         self.engine = create_async_engine(f"sqlite+aiosqlite:///{database_path.as_posix()}")
@@ -83,7 +89,11 @@ class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
     async def test_seed_is_disabled_in_production_even_when_flag_is_true(self) -> None:
         result = await seed_default_admin(
             session_factory=self.session_factory,
-            config=self.development_settings(app_env="production"),
+            config=self.development_settings(
+                app_env="production",
+                database_url="postgresql+asyncpg://app@db:5432/app",
+                jwt_secret_key="x" * 48,
+            ),
         )
 
         self.assertIsNone(result)
@@ -99,6 +109,7 @@ class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
 
         async with self.session_factory() as session:
             tokens = await login(
+                _fake_request(),
                 LoginRequest(
                     email="admin@sentinelops.local",
                     password="ChangeMe123!",
@@ -118,6 +129,7 @@ class AuthenticationTests(unittest.IsolatedAsyncioTestCase):
 
             with self.assertRaises(HTTPException) as caught:
                 await login(
+                    _fake_request(),
                     LoginRequest(
                         email="admin@sentinelops.local",
                         password="WrongPassword123!",

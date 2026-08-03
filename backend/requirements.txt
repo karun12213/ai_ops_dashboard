@@ -1,4 +1,5 @@
 fastapi==0.115.12
+alembic==1.13.2
 uvicorn[standard]==0.34.3
 SQLAlchemy==2.0.41
 asyncpg==0.30.0
@@ -8,3 +9,4 @@ PyJWT==2.10.1
 pwdlib[argon2]==0.2.1
 email-validator==2.2.0
 python-multipart==0.0.20
+httpx==0.28.1

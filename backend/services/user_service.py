@@ -1,3 +1,4 @@
+import secrets
 import uuid
 from typing import Optional
 
@@ -6,6 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth.security import hash_password, verify_password
 from backend.models.user import User
+
+# Verified against a real password on every login attempt, including ones for
+# an email that doesn't exist, so that account existence cannot be inferred
+# from response timing (a nonexistent email would otherwise skip the
+# comparatively expensive Argon2 check entirely).
+_DUMMY_PASSWORD_HASH = hash_password(secrets.token_urlsafe(32))
 
 
 class UserService:
@@ -34,6 +41,8 @@ class UserService:
 
     async def authenticate(self, email: str, password: str) -> Optional[User]:
         user = await self.get_by_email(email)
-        if user is None or not verify_password(password, user.hashed_password):
+        hashed_password = user.hashed_password if user is not None else _DUMMY_PASSWORD_HASH
+        password_is_valid = verify_password(password, hashed_password)
+        if user is None or not password_is_valid:
             return None
         return user

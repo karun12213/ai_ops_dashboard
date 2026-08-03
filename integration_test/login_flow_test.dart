@@ -42,17 +42,20 @@ void main() {
     });
 
     expect(find.text('Good service starts here'), findsOneWidget);
-    expect(
-      find.text('Authentication service unavailable'),
-      findsNothing,
-    );
+    expect(find.text('Authentication service unavailable'), findsNothing);
 
     final tokenStorage = TokenStorage();
     expect((await tokenStorage.getAccessToken())?.isNotEmpty, isTrue);
     expect((await tokenStorage.getRefreshToken())?.isNotEmpty, isTrue);
 
-    // A fresh provider tree must restore and use the persisted access token,
-    // call /auth/me, and remain on the authenticated dashboard.
+    // Replace the access token with an invalid/expired equivalent while
+    // preserving the real refresh token. A fresh provider tree must receive
+    // /auth/me 401, rotate through /auth/refresh, retry /auth/me once, and
+    // remain on the authenticated dashboard.
+    await tokenStorage.saveTokens(
+      accessToken: 'integration-test-expired-access-token',
+      refreshToken: (await tokenStorage.getRefreshToken())!,
+    );
     await tester.pumpWidget(const SizedBox.shrink());
     await tester.pump();
     await tester.pumpWidget(const ProviderScope(child: RestaurantOpsApp()));
@@ -61,6 +64,10 @@ void main() {
       () => find.text('Good service starts here').evaluate().isNotEmpty,
     );
     expect(find.text('Welcome back'), findsNothing);
+    expect(
+      await tokenStorage.getAccessToken(),
+      isNot('integration-test-expired-access-token'),
+    );
   });
 }
 

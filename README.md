@@ -43,17 +43,12 @@ docker compose up --build
 
 Open the web app at `http://localhost:8080`. API documentation is at `http://localhost:8000/docs`. Compose creates the database schema on startup for local use.
 
-Local development seeds this administrator from environment-controlled values:
-
-```text
-Email: admin@sentinelops.local
-Password: ChangeMe123!
-```
-
-The seed is idempotent and can be configured with `SEED_DEFAULT_ADMIN`,
-`DEFAULT_ADMIN_EMAIL`, `DEFAULT_ADMIN_FULL_NAME`, and
-`DEFAULT_ADMIN_PASSWORD`. It is hard-disabled unless `APP_ENV` is
-`development`, `dev`, or `local`, even if the seed flag is accidentally enabled.
+Local development can optionally seed an administrator from environment-only
+values. The seed is disabled by default and is configured with
+`SEED_DEFAULT_ADMIN`, `DEFAULT_ADMIN_EMAIL`, `DEFAULT_ADMIN_FULL_NAME`, and
+`DEFAULT_ADMIN_PASSWORD`. Keep those values in the ignored `.env` file or your
+shell environment. Seeding is hard-disabled unless `APP_ENV` is `development`,
+`dev`, or `local`, even if the seed flag is accidentally enabled.
 
 To create or synchronize the development account explicitly on Windows
 PowerShell without writing its plaintext password to the database:
@@ -61,11 +56,11 @@ PowerShell without writing its plaintext password to the database:
 ```powershell
 $env:APP_ENV='development'
 $env:SEED_DEFAULT_ADMIN='true'
-$env:DEFAULT_ADMIN_EMAIL='admin@sentinelops.local'
-$env:DEFAULT_ADMIN_FULL_NAME='Sentinel Ops Administrator'
-$env:DEFAULT_ADMIN_PASSWORD='ChangeMe123!'
 .\.venv\Scripts\python.exe -m backend.database.init_db
 ```
+
+Set the three `DEFAULT_ADMIN_*` variables to credentials of your choice before
+running the command. The seed will fail closed if any required value is absent.
 
 The seed hashes the password with the same Argon2id implementation used by
 login and stores only the resulting salted hash.
@@ -101,6 +96,16 @@ use PostgreSQL, set `DATABASE_URL` to an asyncpg connection URL.
 Production environments should set `AUTO_CREATE_TABLES=false` and apply
 versioned database migrations before startup.
 
+Run migrations from the project root:
+
+```powershell
+.\.venv\Scripts\alembic.exe -c backend\alembic.ini upgrade head
+```
+
+The baseline adopts a compatible `users` table created by earlier development
+versions without recreating it, so existing accounts and password hashes are
+preserved. Fresh databases receive `users` before `refresh_sessions`.
+
 ### Web client
 
 ```bash
@@ -127,6 +132,7 @@ flutter build web --release --dart-define=API_BASE_URL=https://api.example.com/a
 | `POST` | `/api/v1/auth/register` | Create an operator |
 | `POST` | `/api/v1/auth/login` | Issue access and refresh JWTs |
 | `POST` | `/api/v1/auth/refresh` | Rotate the presented refresh token into a new token pair |
+| `POST` | `/api/v1/auth/logout` | Revoke the presented authenticated refresh session |
 | `GET` | `/api/v1/auth/me` | Return the authenticated operator |
 
 ## Production configuration
@@ -135,7 +141,11 @@ Never deploy the example secrets. At minimum, set `DATABASE_URL`, a randomly gen
 
 The included `railway.toml` deploys the API from `backend/Dockerfile`. Add a Railway PostgreSQL service, map its async connection URL to `DATABASE_URL`, and set the remaining variables above. The Dockerfile honors Railway's injected `PORT`.
 
-The browser stores JWTs in web storage for this foundation. For a hardened public deployment, prefer a same-origin backend-for-frontend using Secure, HttpOnly, SameSite cookies and add server-side refresh-token revocation.
+The browser stores JWTs in web storage for this foundation. Refresh tokens are
+hashed server-side, rotated on every exchange, revoked on logout, and their
+reuse revokes the user's other active refresh sessions. For a hardened public
+deployment, prefer a same-origin backend-for-frontend using Secure, HttpOnly,
+SameSite cookies so browser scripts cannot read session credentials.
 
 ## Deliberate Task 1 boundary
 

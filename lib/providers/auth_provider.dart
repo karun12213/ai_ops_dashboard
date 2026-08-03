@@ -1,4 +1,3 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../config/development_login_config.dart';
@@ -126,25 +125,13 @@ class AuthNotifier extends StateNotifier<AuthState> {
         );
         return false;
       }
-      if (kDebugMode) {
-        debugPrint(
-          'Authentication request failed (HTTP status: '
-          '${error.statusCode?.toString() ?? 'unavailable'}).',
-        );
-      }
       state = AuthState(
         status: AuthStatus.unauthenticated,
         errorMessage: _loginErrorMessage(error.statusCode),
       );
       return false;
-    } catch (error) {
+    } catch (_) {
       if (!mounted) return false;
-      if (kDebugMode) {
-        debugPrint(
-          'Authentication response handling failed '
-          '(${error.runtimeType}).',
-        );
-      }
       state = const AuthState(
         status: AuthStatus.unauthenticated,
         errorMessage: 'Sign in could not be completed. Please try again.',

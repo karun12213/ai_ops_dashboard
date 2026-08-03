@@ -52,9 +52,16 @@ class AuthService {
   }
 
   Future<User?> restoreSession() async {
-    final token = await _tokenStorage.getAccessToken();
-    if (token == null) return null;
+    final accessToken = await _tokenStorage.getAccessToken();
+    final refreshToken = await _tokenStorage.getRefreshToken();
+    if (accessToken == null && refreshToken == null) return null;
+    if (accessToken == null && !await _apiClient.refreshAccessToken()) {
+      return null;
+    }
     try {
+      // ApiClient rotates the refresh token and retries once if this access
+      // token is expired. Non-authentication failures preserve the saved
+      // session so a temporary outage does not destroy valid credentials.
       return await currentUser();
     } on ApiException catch (error) {
       if (error.statusCode == 401) await _tokenStorage.clear();
@@ -66,5 +73,19 @@ class AuthService {
     }
   }
 
-  Future<void> logout() => _tokenStorage.clear();
+  Future<void> logout() async {
+    final refreshToken = await _tokenStorage.getRefreshToken();
+    if (refreshToken != null) {
+      try {
+        await _apiClient.post(
+          '/auth/logout',
+          body: {'refresh_token': refreshToken},
+        );
+      } catch (_) {
+        // Best-effort server-side revocation; the local session must still
+        // end even if the network call fails.
+      }
+    }
+    await _tokenStorage.clear();
+  }
 }
