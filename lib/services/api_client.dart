@@ -34,6 +34,7 @@ class ApiClient {
   Future<bool>? _refreshInFlight;
 
   static const _requestTimeout = Duration(seconds: 15);
+  static const _uploadTimeout = Duration(minutes: 5);
 
   Uri _uri(String path) => AppConstants.apiUri(path);
 
@@ -76,6 +77,54 @@ class ApiClient {
     }
   }
 
+  Future<Map<String, dynamic>> multipartPost(
+    String path, {
+    required String fieldName,
+    required String filename,
+    required int length,
+    required Stream<List<int>> Function() openRead,
+    void Function(double progress)? onProgress,
+    bool authenticated = true,
+  }) async {
+    try {
+      final response = await _sendWithAuthRetry(
+        authenticated: authenticated,
+        timeout: _uploadTimeout,
+        send: (headers) {
+          onProgress?.call(0);
+          return _sendMultipart(
+            path: path,
+            headers: headers,
+            fieldName: fieldName,
+            filename: filename,
+            length: length,
+            stream: openRead(),
+            onProgress: onProgress,
+          );
+        },
+      );
+      return _decode(response);
+    } on TimeoutException {
+      throw const ApiException('The upload did not complete in time.');
+    } on http.ClientException {
+      throw const ApiException('Unable to reach the API.');
+    }
+  }
+
+  Future<void> delete(String path, {bool authenticated = true}) async {
+    try {
+      final response = await _sendWithAuthRetry(
+        authenticated: authenticated,
+        send: (headers) => _client.delete(_uri(path), headers: headers),
+      );
+      _decode(response);
+    } on TimeoutException {
+      throw const ApiException('The API did not respond in time.');
+    } on http.ClientException {
+      throw const ApiException('Unable to reach the API.');
+    }
+  }
+
   Future<ApiDownloadResponse> download(
     String path, {
     bool authenticated = true,
@@ -109,9 +158,10 @@ class ApiClient {
   Future<http.Response> _sendWithAuthRetry({
     required bool authenticated,
     required Future<http.Response> Function(Map<String, String> headers) send,
+    Duration timeout = _requestTimeout,
   }) async {
     final initial = await _headers(authenticated);
-    final response = await send(initial.headers).timeout(_requestTimeout);
+    final response = await send(initial.headers).timeout(timeout);
     if (!authenticated || response.statusCode != 401) return response;
 
     // Another request may already have completed a refresh after this request
@@ -122,12 +172,46 @@ class ApiClient {
         currentAccessToken != null &&
         currentAccessToken != initial.accessToken) {
       final retryHeaders = await _headers(true);
-      return send(retryHeaders.headers).timeout(_requestTimeout);
+      return send(retryHeaders.headers).timeout(timeout);
     }
 
     if (!await refreshAccessToken()) return response;
     final retryHeaders = await _headers(true);
-    return send(retryHeaders.headers).timeout(_requestTimeout);
+    return send(retryHeaders.headers).timeout(timeout);
+  }
+
+  Future<http.Response> _sendMultipart({
+    required String path,
+    required Map<String, String> headers,
+    required String fieldName,
+    required String filename,
+    required int length,
+    required Stream<List<int>> stream,
+    void Function(double progress)? onProgress,
+  }) async {
+    if (length <= 0) throw const ApiException('The selected file is empty.');
+    var bytesSent = 0;
+    final progressStream = stream.transform(
+      StreamTransformer<List<int>, List<int>>.fromHandlers(
+        handleData: (chunk, sink) {
+          bytesSent += chunk.length;
+          onProgress?.call((bytesSent / length).clamp(0, 1));
+          sink.add(chunk);
+        },
+      ),
+    );
+    final request = http.MultipartRequest('POST', _uri(path));
+    request.headers.addAll(headers..remove('Content-Type'));
+    request.files.add(
+      http.MultipartFile(
+        fieldName,
+        http.ByteStream(progressStream),
+        length,
+        filename: filename,
+      ),
+    );
+    final streamedResponse = await _client.send(request);
+    return http.Response.fromStream(streamedResponse);
   }
 
   /// Rotates the saved refresh token, coalescing simultaneous refreshes.
