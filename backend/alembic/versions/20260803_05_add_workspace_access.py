@@ -125,7 +125,7 @@ def _upgrade_report_locations(inspector: sa.Inspector) -> None:
         return
 
     old_unique_name = _unique_constraint_name(inspector, "report_locations", ["name"])
-    with op.batch_alter_table("report_locations", recreate="always") as batch:
+    with op.batch_alter_table("report_locations") as batch:
         if "workspace_id" not in columns:
             batch.add_column(sa.Column("workspace_id", sa.Uuid(as_uuid=True), nullable=True))
             batch.create_foreign_key(
@@ -162,7 +162,7 @@ def _upgrade_dashboard_snapshots(inspector: sa.Inspector) -> None:
         return
 
     old_unique_name = _unique_constraint_name(inspector, table_name, ["service_date"])
-    with op.batch_alter_table(table_name, recreate="always") as batch:
+    with op.batch_alter_table(table_name) as batch:
         if "location_id" not in columns:
             batch.add_column(sa.Column("location_id", sa.Uuid(as_uuid=True), nullable=True))
             batch.create_foreign_key(
@@ -192,7 +192,7 @@ def _upgrade_dashboard_activities(inspector: sa.Inspector) -> None:
                 ["location_id", "service_date"],
             )
         return
-    with op.batch_alter_table(table_name, recreate="always") as batch:
+    with op.batch_alter_table(table_name) as batch:
         batch.add_column(sa.Column("location_id", sa.Uuid(as_uuid=True), nullable=True))
         batch.create_foreign_key(
             "fk_dashboard_activities_location_id_report_locations",
@@ -223,7 +223,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Restore the pre-workspace schema without assigning ownership."""
-    with op.batch_alter_table("dashboard_activities", recreate="always") as batch:
+    with op.batch_alter_table("dashboard_activities") as batch:
         batch.drop_index("ix_dashboard_activities_location_date")
         batch.drop_constraint(
             "fk_dashboard_activities_location_id_report_locations",
@@ -231,7 +231,7 @@ def downgrade() -> None:
         )
         batch.drop_column("location_id")
 
-    with op.batch_alter_table("dashboard_daily_snapshots", recreate="always") as batch:
+    with op.batch_alter_table("dashboard_daily_snapshots") as batch:
         batch.drop_index("ix_dashboard_daily_snapshots_location_id")
         batch.drop_constraint(
             "uq_dashboard_daily_snapshots_location_date",
@@ -247,7 +247,7 @@ def downgrade() -> None:
             ["service_date"],
         )
 
-    with op.batch_alter_table("report_locations", recreate="always") as batch:
+    with op.batch_alter_table("report_locations") as batch:
         batch.drop_index("ix_report_locations_workspace_id")
         batch.drop_constraint("uq_report_locations_workspace_name", type_="unique")
         batch.drop_constraint(
