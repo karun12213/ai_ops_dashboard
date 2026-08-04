@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/report_data.dart';
 import '../providers/report_provider.dart';
+import '../providers/workspace_provider.dart';
 import '../widgets/page_header.dart';
 
 class ReportsScreen extends ConsumerStatefulWidget {
@@ -19,7 +20,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final filter = ref.watch(reportFilterProvider);
+    final filter = ref.watch(effectiveReportFilterProvider);
     final report = ref.watch(reportProvider);
     final currentData = report.asData?.value;
     final canExport = report.asData != null && !_isExporting;
@@ -95,7 +96,9 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   }
 
   Future<void> _export() async {
-    final filter = ref.read(reportFilterProvider);
+    final filter = ref.read(effectiveReportFilterProvider);
+    final workspace = ref.read(workspaceProvider).activeWorkspace;
+    if (workspace == null) return;
     setState(() => _isExporting = true);
     try {
       final export = await ref
@@ -103,6 +106,7 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
           .exportCsv(
             startDate: filter.startDate,
             endDate: filter.endDate,
+            workspaceId: workspace.id,
             locationId: filter.locationId,
           );
       await ref.read(csvExportSaverProvider).save(export);

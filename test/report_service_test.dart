@@ -20,6 +20,7 @@ void main() {
           Uri.parse(
             'http://localhost:8000/api/v1/reports'
             '?start_date=2026-07-05&end_date=2026-08-03'
+            '&workspace_id=workspace-1'
             '&location_id=$locationId',
           ),
         );
@@ -79,6 +80,7 @@ void main() {
     final report = await ReportService(apiClient).fetch(
       startDate: DateTime(2026, 7, 5),
       endDate: DateTime(2026, 8, 3),
+      workspaceId: 'workspace-1',
       locationId: locationId,
     );
 
@@ -120,9 +122,11 @@ void main() {
       ),
     );
 
-    final report = await ReportService(
-      apiClient,
-    ).fetch(startDate: DateTime(2026, 7, 5), endDate: DateTime(2026, 8, 3));
+    final report = await ReportService(apiClient).fetch(
+      startDate: DateTime(2026, 7, 5),
+      endDate: DateTime(2026, 8, 3),
+      workspaceId: 'workspace-1',
+    );
 
     expect(report.totals.currencyCode, isNull);
     expect(report.hasData, isFalse);
@@ -138,7 +142,8 @@ void main() {
             request.url,
             Uri.parse(
               'http://localhost:8000/api/v1/reports/export.csv'
-              '?start_date=2026-07-05&end_date=2026-08-03',
+              '?start_date=2026-07-05&end_date=2026-08-03'
+              '&workspace_id=workspace-1',
             ),
           );
           expect(
@@ -161,6 +166,7 @@ void main() {
       final export = await ReportService(apiClient).exportCsv(
         startDate: DateTime(2026, 7, 5),
         endDate: DateTime(2026, 8, 3),
+        workspaceId: 'workspace-1',
       );
 
       expect(

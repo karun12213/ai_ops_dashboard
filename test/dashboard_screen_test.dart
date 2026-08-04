@@ -1,9 +1,12 @@
 import 'dart:async';
 
 import 'package:ai_ops_dashboard/models/dashboard_data.dart';
+import 'package:ai_ops_dashboard/models/workspace_context.dart';
 import 'package:ai_ops_dashboard/providers/dashboard_provider.dart';
+import 'package:ai_ops_dashboard/providers/workspace_provider.dart';
 import 'package:ai_ops_dashboard/screens/dashboard_screen.dart';
 import 'package:ai_ops_dashboard/services/dashboard_service.dart';
+import 'package:ai_ops_dashboard/services/workspace_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -89,6 +92,13 @@ Future<void> _pumpDashboard(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
+        workspaceProvider.overrideWith(
+          (ref) => WorkspaceNotifier(
+            _UnusedWorkspaceRepository(),
+            loadOnCreate: false,
+            initialState: _workspaceState,
+          ),
+        ),
         dashboardDateProvider.overrideWith((ref) => DateTime(2026, 8, 3)),
         dashboardServiceProvider.overrideWith((ref) => service),
       ],
@@ -104,7 +114,50 @@ class _FakeDashboardService implements DashboardService {
   final Future<DashboardData> Function(DateTime date) onFetch;
 
   @override
-  Future<DashboardData> fetch(DateTime serviceDate) => onFetch(serviceDate);
+  Future<DashboardData> fetch({
+    required DateTime serviceDate,
+    required String workspaceId,
+    required String locationId,
+  }) => onFetch(serviceDate);
+}
+
+const _workspace = WorkspaceAccess(
+  id: 'workspace-1',
+  name: 'Restaurant',
+  role: WorkspaceRole.owner,
+  locations: [
+    WorkspaceLocation(
+      id: 'location-1',
+      name: 'Main Floor',
+      currencyCode: 'INR',
+    ),
+  ],
+);
+
+const _workspaceState = WorkspaceState(
+  workspaces: [_workspace],
+  activeWorkspaceId: 'workspace-1',
+  activeLocationId: 'location-1',
+  isLoading: false,
+);
+
+class _UnusedWorkspaceRepository implements WorkspaceRepository {
+  @override
+  Future<WorkspaceContext> fetchContext() => throw UnimplementedError();
+
+  @override
+  Future<WorkspaceAccess> createWorkspace({
+    required String name,
+    required String locationName,
+    required String currencyCode,
+  }) => throw UnimplementedError();
+
+  @override
+  Future<WorkspaceLocation> createLocation({
+    required String workspaceId,
+    required String name,
+    required String currencyCode,
+  }) => throw UnimplementedError();
 }
 
 final _emptyData = DashboardData(

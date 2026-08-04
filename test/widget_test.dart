@@ -2,12 +2,15 @@ import 'dart:async';
 
 import 'package:ai_ops_dashboard/app.dart';
 import 'package:ai_ops_dashboard/models/user.dart';
+import 'package:ai_ops_dashboard/models/workspace_context.dart';
 import 'package:ai_ops_dashboard/providers/auth_provider.dart';
 import 'package:ai_ops_dashboard/providers/dashboard_provider.dart';
+import 'package:ai_ops_dashboard/providers/workspace_provider.dart';
 import 'package:ai_ops_dashboard/screens/login_screen.dart';
 import 'package:ai_ops_dashboard/services/api_client.dart';
 import 'package:ai_ops_dashboard/services/auth_service.dart';
 import 'package:ai_ops_dashboard/services/dashboard_service.dart';
+import 'package:ai_ops_dashboard/services/workspace_service.dart';
 import 'package:ai_ops_dashboard/models/dashboard_data.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -196,6 +199,13 @@ Future<void> _pumpLoginApp(WidgetTester tester, AuthService authService) async {
         dashboardServiceProvider.overrideWith(
           (ref) => _EmptyDashboardService(),
         ),
+        workspaceProvider.overrideWith(
+          (ref) => WorkspaceNotifier(
+            _UnusedWorkspaceRepository(),
+            loadOnCreate: false,
+            initialState: _workspaceState,
+          ),
+        ),
       ],
       child: const RestaurantOpsApp(),
     ),
@@ -207,11 +217,54 @@ Future<void> _pumpLoginApp(WidgetTester tester, AuthService authService) async {
 
 class _EmptyDashboardService implements DashboardService {
   @override
-  Future<DashboardData> fetch(DateTime serviceDate) async {
+  Future<DashboardData> fetch({
+    required DateTime serviceDate,
+    required String workspaceId,
+    required String locationId,
+  }) async {
     return DashboardData(
       serviceDate: serviceDate,
       snapshot: null,
       recentActivity: const [],
     );
   }
+}
+
+const _workspaceState = WorkspaceState(
+  workspaces: [
+    WorkspaceAccess(
+      id: 'workspace-1',
+      name: 'Restaurant',
+      role: WorkspaceRole.owner,
+      locations: [
+        WorkspaceLocation(
+          id: 'location-1',
+          name: 'Main Floor',
+          currencyCode: 'INR',
+        ),
+      ],
+    ),
+  ],
+  activeWorkspaceId: 'workspace-1',
+  activeLocationId: 'location-1',
+  isLoading: false,
+);
+
+class _UnusedWorkspaceRepository implements WorkspaceRepository {
+  @override
+  Future<WorkspaceContext> fetchContext() => throw UnimplementedError();
+
+  @override
+  Future<WorkspaceAccess> createWorkspace({
+    required String name,
+    required String locationName,
+    required String currencyCode,
+  }) => throw UnimplementedError();
+
+  @override
+  Future<WorkspaceLocation> createLocation({
+    required String workspaceId,
+    required String name,
+    required String currencyCode,
+  }) => throw UnimplementedError();
 }

@@ -18,10 +18,11 @@ class ReportService {
   Future<ReportData> fetch({
     required DateTime startDate,
     required DateTime endDate,
+    required String workspaceId,
     String? locationId,
   }) async {
     final payload = await _apiClient.get(
-      _path('/reports', startDate, endDate, locationId),
+      _path('/reports', startDate, endDate, workspaceId, locationId),
     );
     return ReportData.fromJson(payload);
   }
@@ -29,10 +30,11 @@ class ReportService {
   Future<ReportExport> exportCsv({
     required DateTime startDate,
     required DateTime endDate,
+    required String workspaceId,
     String? locationId,
   }) async {
     final response = await _apiClient.download(
-      _path('/reports/export.csv', startDate, endDate, locationId),
+      _path('/reports/export.csv', startDate, endDate, workspaceId, locationId),
     );
     final fallback =
         'reports_${_dateParameter(startDate)}_to_${_dateParameter(endDate)}.csv';
@@ -46,6 +48,7 @@ class ReportService {
     String path,
     DateTime startDate,
     DateTime endDate,
+    String workspaceId,
     String? locationId,
   ) {
     return Uri(
@@ -53,6 +56,7 @@ class ReportService {
       queryParameters: {
         'start_date': _dateParameter(startDate),
         'end_date': _dateParameter(endDate),
+        'workspace_id': workspaceId,
         'location_id': ?locationId,
       },
     ).toString();

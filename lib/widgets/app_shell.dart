@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../providers/auth_provider.dart';
+import '../providers/workspace_provider.dart';
 import '../routes/app_router.dart';
+import '../screens/workspace_setup_screen.dart';
 import '../utils/app_constants.dart';
 import 'app_navigation_drawer.dart';
 
@@ -18,6 +20,9 @@ class AppShell extends ConsumerWidget {
     final wide =
         MediaQuery.sizeOf(context).width >= AppConstants.desktopBreakpoint;
     final user = ref.watch(authProvider).user;
+    final workspaceState = ref.watch(workspaceProvider);
+    final requiresWorkspace =
+        location == AppRoutes.dashboard || location == AppRoutes.reports;
 
     return Scaffold(
       drawer: wide ? null : AppNavigationDrawer(currentLocation: location),
@@ -25,14 +30,8 @@ class AppShell extends ConsumerWidget {
         automaticallyImplyLeading: !wide,
         title: Text(_title(location)),
         actions: [
-          IconButton(
-            tooltip: 'Notifications',
-            onPressed: () {},
-            icon: const Badge(
-              smallSize: 7,
-              child: Icon(Icons.notifications_none_rounded),
-            ),
-          ),
+          if (workspaceState.hasReadyContext)
+            _WorkspaceLocationSelector(state: workspaceState, compact: !wide),
           const SizedBox(width: 6),
           Padding(
             padding: const EdgeInsets.only(right: 16),
@@ -61,13 +60,33 @@ class AppShell extends ConsumerWidget {
                 constraints: const BoxConstraints(
                   maxWidth: AppConstants.pageMaxWidth,
                 ),
-                child: child,
+                child: requiresWorkspace
+                    ? _workspaceBody(workspaceState, child)
+                    : child,
               ),
             ),
           ),
         ],
       ),
     );
+  }
+
+  static Widget _workspaceBody(WorkspaceState state, Widget child) {
+    if (state.hasReadyContext) return child;
+    if (state.isLoading) {
+      return const Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 14),
+            Text('Loading workspace access…'),
+          ],
+        ),
+      );
+    }
+    if (state.loadError != null) return const _WorkspaceLoadError();
+    return const WorkspaceSetupScreen();
   }
 
   static String _title(String location) => switch (location) {
@@ -85,6 +104,133 @@ class AppShell extends ConsumerWidget {
         .map((part) => part[0])
         .join()
         .toUpperCase();
+  }
+}
+
+class _WorkspaceLocationSelector extends ConsumerWidget {
+  const _WorkspaceLocationSelector({
+    required this.state,
+    required this.compact,
+  });
+
+  final WorkspaceState state;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final activeWorkspace = state.activeWorkspace!;
+    final activeLocation = state.activeLocation!;
+    return PopupMenuButton<({String workspaceId, String locationId})>(
+      key: const Key('workspace-location-selector'),
+      tooltip: 'Change workspace location',
+      onSelected: (selection) {
+        ref
+            .read(workspaceProvider.notifier)
+            .selectLocation(
+              workspaceId: selection.workspaceId,
+              locationId: selection.locationId,
+            );
+      },
+      itemBuilder: (context) => [
+        for (final workspace in state.workspaces)
+          for (final location in workspace.locations)
+            PopupMenuItem(
+              value: (workspaceId: workspace.id, locationId: location.id),
+              child: Row(
+                children: [
+                  Icon(
+                    workspace.id == activeWorkspace.id &&
+                            location.id == activeLocation.id
+                        ? Icons.radio_button_checked
+                        : Icons.radio_button_unchecked,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(location.name),
+                        Text(
+                          workspace.name,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+      ],
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: compact ? 150 : 260),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+          decoration: BoxDecoration(
+            border: Border.all(
+              color: Theme.of(context).colorScheme.outlineVariant,
+            ),
+            borderRadius: BorderRadius.circular(10),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.location_on_outlined, size: 18),
+              const SizedBox(width: 7),
+              Flexible(
+                child: Text(
+                  compact
+                      ? activeLocation.name
+                      : '${activeWorkspace.name} · ${activeLocation.name}',
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 4),
+              const Icon(Icons.arrow_drop_down_rounded, size: 18),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _WorkspaceLoadError extends ConsumerWidget {
+  const _WorkspaceLoadError();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.domain_disabled_outlined,
+              size: 46,
+              color: Theme.of(context).colorScheme.error,
+            ),
+            const SizedBox(height: 14),
+            Text(
+              'Workspace access is unavailable',
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            const Text('Check your connection and try again.'),
+            const SizedBox(height: 16),
+            FilledButton.icon(
+              key: const Key('workspace-load-retry-button'),
+              onPressed: ref.read(workspaceProvider.notifier).load,
+              icon: const Icon(Icons.refresh_rounded),
+              label: const Text('Try again'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

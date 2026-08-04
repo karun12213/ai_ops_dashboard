@@ -4,6 +4,7 @@ import '../models/report_data.dart';
 import '../services/csv_export_saver.dart';
 import '../services/report_service.dart';
 import 'auth_provider.dart';
+import 'workspace_provider.dart';
 
 enum ReportPeriod { last7Days, last30Days, thisQuarter }
 
@@ -73,13 +74,28 @@ final reportServiceProvider = Provider<ReportService>((ref) {
   return ReportService(ref.watch(apiClientProvider));
 });
 
-final reportProvider = FutureProvider.autoDispose<ReportData>((ref) {
+final effectiveReportFilterProvider = Provider.autoDispose<ReportFilter>((ref) {
   final filter = ref.watch(reportFilterProvider);
+  final workspace = ref.watch(workspaceProvider).activeWorkspace;
+  if (filter.locationId == null ||
+      workspace?.locationById(filter.locationId) != null) {
+    return filter;
+  }
+  return filter.withLocation(null);
+});
+
+final reportProvider = FutureProvider.autoDispose<ReportData>((ref) {
+  final filter = ref.watch(effectiveReportFilterProvider);
+  final workspace = ref.watch(workspaceProvider).activeWorkspace;
+  if (workspace == null) {
+    throw StateError('Workspace context is required.');
+  }
   return ref
       .watch(reportServiceProvider)
       .fetch(
         startDate: filter.startDate,
         endDate: filter.endDate,
+        workspaceId: workspace.id,
         locationId: filter.locationId,
       );
 });

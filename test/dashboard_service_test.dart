@@ -21,7 +21,8 @@ void main() {
           expect(
             request.url,
             Uri.parse(
-              'http://localhost:8000/api/v1/dashboard?service_date=2026-08-03',
+              'http://localhost:8000/api/v1/dashboard?service_date=2026-08-03'
+              '&workspace_id=workspace-1&location_id=location-1',
             ),
           );
           expect(
@@ -76,9 +77,11 @@ void main() {
         }),
       );
 
-      final data = await DashboardService(
-        apiClient,
-      ).fetch(DateTime(2026, 8, 3));
+      final data = await DashboardService(apiClient).fetch(
+        serviceDate: DateTime(2026, 8, 3),
+        workspaceId: 'workspace-1',
+        locationId: 'location-1',
+      );
 
       expect(data.serviceDate, DateTime(2026, 8, 3));
       expect(data.snapshot?.metrics.netSalesMinor, 10200);
@@ -104,7 +107,11 @@ void main() {
       ),
     );
 
-    final data = await DashboardService(apiClient).fetch(DateTime(2026, 8, 3));
+    final data = await DashboardService(apiClient).fetch(
+      serviceDate: DateTime(2026, 8, 3),
+      workspaceId: 'workspace-1',
+      locationId: 'location-1',
+    );
 
     expect(data.snapshot, isNull);
     expect(data.recentActivity, isEmpty);

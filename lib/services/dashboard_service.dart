@@ -7,9 +7,21 @@ class DashboardService {
   final ApiClient _apiClient;
 
   /// Loads the operational Dashboard snapshot for one local service date.
-  Future<DashboardData> fetch(DateTime serviceDate) async {
+  Future<DashboardData> fetch({
+    required DateTime serviceDate,
+    required String workspaceId,
+    required String locationId,
+  }) async {
     final date = _dateParameter(serviceDate);
-    final payload = await _apiClient.get('/dashboard?service_date=$date');
+    final path = Uri(
+      path: '/dashboard',
+      queryParameters: {
+        'service_date': date,
+        'workspace_id': workspaceId,
+        'location_id': locationId,
+      },
+    ).toString();
+    final payload = await _apiClient.get(path);
     return DashboardData.fromJson(payload);
   }
 

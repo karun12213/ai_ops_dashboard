@@ -2,10 +2,13 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:ai_ops_dashboard/models/report_data.dart';
+import 'package:ai_ops_dashboard/models/workspace_context.dart';
 import 'package:ai_ops_dashboard/providers/report_provider.dart';
+import 'package:ai_ops_dashboard/providers/workspace_provider.dart';
 import 'package:ai_ops_dashboard/screens/reports_screen.dart';
 import 'package:ai_ops_dashboard/services/csv_export_saver.dart';
 import 'package:ai_ops_dashboard/services/report_service.dart';
+import 'package:ai_ops_dashboard/services/workspace_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -201,6 +204,7 @@ class _FakeReportService implements ReportService {
   Future<ReportData> fetch({
     required DateTime startDate,
     required DateTime endDate,
+    required String workspaceId,
     String? locationId,
   }) {
     return onFetch(
@@ -214,6 +218,7 @@ class _FakeReportService implements ReportService {
   Future<ReportExport> exportCsv({
     required DateTime startDate,
     required DateTime endDate,
+    required String workspaceId,
     String? locationId,
   }) {
     final callback = onExport;
@@ -260,6 +265,13 @@ Future<void> _pumpReports(
   await tester.pumpWidget(
     ProviderScope(
       overrides: [
+        workspaceProvider.overrideWith(
+          (ref) => WorkspaceNotifier(
+            _UnusedWorkspaceRepository(),
+            loadOnCreate: false,
+            initialState: _workspaceState,
+          ),
+        ),
         reportTodayProvider.overrideWithValue(DateTime(2026, 8, 3)),
         reportServiceProvider.overrideWithValue(service),
         if (saver != null) csvExportSaverProvider.overrideWithValue(saver),
@@ -271,6 +283,41 @@ Future<void> _pumpReports(
 }
 
 const _locationId = '95cd56e6-228e-47dc-8fb4-3ac8760c2082';
+
+const _workspaceState = WorkspaceState(
+  workspaces: [
+    WorkspaceAccess(
+      id: 'workspace-1',
+      name: 'Restaurant',
+      role: WorkspaceRole.owner,
+      locations: [
+        WorkspaceLocation(id: _locationId, name: 'Bandra', currencyCode: 'INR'),
+      ],
+    ),
+  ],
+  activeWorkspaceId: 'workspace-1',
+  activeLocationId: _locationId,
+  isLoading: false,
+);
+
+class _UnusedWorkspaceRepository implements WorkspaceRepository {
+  @override
+  Future<WorkspaceContext> fetchContext() => throw UnimplementedError();
+
+  @override
+  Future<WorkspaceAccess> createWorkspace({
+    required String name,
+    required String locationName,
+    required String currencyCode,
+  }) => throw UnimplementedError();
+
+  @override
+  Future<WorkspaceLocation> createLocation({
+    required String workspaceId,
+    required String name,
+    required String currencyCode,
+  }) => throw UnimplementedError();
+}
 
 final _emptyData = ReportData(
   startDate: DateTime(2026, 7, 5),
