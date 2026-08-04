@@ -5,7 +5,7 @@ A production-oriented foundation for a restaurant operations platform. The repos
 ## What is included
 
 - Flutter Web with Material 3, Riverpod, GoRouter, responsive drawer/navigation rail, dark theme, and authenticated route guards
-- Login, dashboard, reports, authenticated audio uploads, and settings screens
+- Login, workspace-aware dashboard and reports, authenticated audio uploads, and settings screens
 - FastAPI with async PostgreSQL access, user registration, login, token refresh, current-user, liveness, and database-readiness APIs
 - Argon2 password hashing and short-lived access plus refresh JWTs
 - Docker images, Docker Compose, Nginx SPA/proxy configuration, environment template, and Railway config-as-code
@@ -134,7 +134,14 @@ flutter build web --release --dart-define=API_BASE_URL=https://api.example.com/a
 | `POST` | `/api/v1/auth/refresh` | Rotate the presented refresh token into a new token pair |
 | `POST` | `/api/v1/auth/logout` | Revoke the presented authenticated refresh session |
 | `GET` | `/api/v1/auth/me` | Return the authenticated operator |
-| `GET` | `/api/v1/dashboard?service_date=YYYY-MM-DD` | Return the authenticated daily Dashboard snapshot and recent activity |
+| `GET` | `/api/v1/workspaces/context` | Return the caller's database-backed workspace, role, and location access |
+| `POST` | `/api/v1/workspaces` | Create a workspace with an owner membership and first location |
+| `POST` | `/api/v1/workspaces/{id}/locations` | Create a location as a workspace owner |
+| `GET` | `/api/v1/workspaces/{id}/members` | List members as a workspace owner |
+| `POST` | `/api/v1/workspaces/{id}/members` | Add an existing operator as an owner or member |
+| `GET` | `/api/v1/dashboard?workspace_id=...&location_id=...&service_date=YYYY-MM-DD` | Return the authorized location's daily Dashboard snapshot and recent activity |
+| `GET` | `/api/v1/reports?workspace_id=...&start_date=...&end_date=...` | Return an authorized workspace report, optionally filtered by location |
+| `GET` | `/api/v1/reports/export.csv?workspace_id=...&start_date=...&end_date=...` | Export authorized workspace report rows as CSV |
 | `POST` | `/api/v1/audio-uploads` | Validate and store authenticated multipart audio |
 | `GET` | `/api/v1/audio-uploads?limit=50` | List the authenticated operator's upload history |
 | `GET` | `/api/v1/audio-uploads/{id}/download` | Download an owned, ready audio object |
@@ -144,6 +151,17 @@ Dashboard responses are sourced from the date-scoped
 `dashboard_daily_snapshots`, `dashboard_hourly_sales`, and
 `dashboard_activities` tables. Dates without stored operational data return a
 successful empty payload; the API does not manufacture demo metrics.
+
+Workspace membership is checked from the database on every protected request.
+Owners can create locations and manage memberships; members have read access to
+Dashboard and Reports. Authenticated callers receive HTTP 404 for workspaces or
+locations they cannot access. `report_locations` remains the canonical location
+table for both reporting and workspace context.
+
+The workspace migration deliberately leaves existing locations, Dashboard
+snapshots, and activities unowned. These legacy rows are not visible through
+tenant-scoped APIs until an operator performs an explicit, reviewed ownership
+backfill; the migration never guesses ownership.
 
 Audio uploads support MP3, WAV, M4A, AAC, and OGG files up to 100 MiB. The API
 streams the file through a byte-signature validator and stores it under a
