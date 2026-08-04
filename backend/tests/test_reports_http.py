@@ -292,6 +292,32 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(outsider_report.status_code, 404)
         self.assertEqual(outsider_csv.status_code, 404)
 
+    async def test_database_member_role_can_read_reports_and_csv(self) -> None:
+        async with self.session_factory() as session:
+            session.add(
+                WorkspaceMembership(
+                    workspace_id=self.workspace.id,
+                    user_id=self.other_user.id,
+                    role="member",
+                )
+            )
+            await session.commit()
+
+        report = await self.client.get(
+            "/api/v1/reports",
+            params=self._params(),
+            headers=self.other_headers,
+        )
+        export = await self.client.get(
+            "/api/v1/reports/export.csv",
+            params=self._params(),
+            headers=self.other_headers,
+        )
+
+        self.assertEqual(report.status_code, 200)
+        self.assertEqual(export.status_code, 200)
+        self.assertEqual(export.headers["content-type"], "text/csv; charset=utf-8")
+
     async def test_report_rejects_unknown_location_and_mixed_currencies(self) -> None:
         unknown_response = await self.client.get(
             "/api/v1/reports",

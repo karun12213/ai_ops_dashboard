@@ -237,6 +237,25 @@ class DashboardHttpTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(owner_to_outsider.status_code, 404)
         self.assertEqual(mismatched_pair.status_code, 404)
 
+    async def test_database_member_role_can_read_dashboard(self) -> None:
+        async with self.session_factory() as session:
+            session.add(
+                WorkspaceMembership(
+                    workspace_id=self.workspace.id,
+                    user_id=self.other_user.id,
+                    role="member",
+                )
+            )
+            await session.commit()
+
+        response = await self.client.get(
+            "/api/v1/dashboard",
+            params=self._params(),
+            headers=self.other_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+
     async def test_dashboard_validates_required_context_and_query_bounds(self) -> None:
         missing_context = await self.client.get(
             "/api/v1/dashboard",
