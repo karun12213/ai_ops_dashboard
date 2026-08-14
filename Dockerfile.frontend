@@ -1,0 +1,20 @@
+FROM ghcr.io/cirruslabs/flutter:stable AS build
+
+WORKDIR /app
+
+COPY pubspec.yaml pubspec.lock ./
+RUN flutter pub get
+
+COPY . .
+
+ARG API_BASE_URL
+RUN flutter build web --release --dart-define=API_BASE_URL=${API_BASE_URL}
+
+FROM node:20-alpine
+
+RUN npm install -g serve
+
+WORKDIR /app
+COPY --from=build /app/build/web ./build/web
+
+CMD ["sh", "-c", "serve -s build/web -l tcp://0.0.0.0:${PORT:-8080}"]
