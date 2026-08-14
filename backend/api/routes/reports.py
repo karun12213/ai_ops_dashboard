@@ -8,13 +8,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.api.schemas.report import ReportResponse
 from backend.auth.dependencies import CurrentUser
 from backend.database.session import get_db
+from backend.services.report_pdf_service import AudioReportPdfService
 from backend.services.report_service import (
     MixedReportCurrencyError,
     ReportCsvRowLimitError,
     ReportService,
     UnknownReportLocationError,
 )
-from backend.services.workspace_service import WorkspaceNotFoundError, WorkspaceService
+from backend.services.workspace_service import (
+    WorkspaceAccessDeniedError,
+    WorkspaceNotFoundError,
+    WorkspaceService,
+)
 
 router = APIRouter(prefix="/reports", tags=["reports"])
 
@@ -118,3 +123,41 @@ def _validate_range(start_date: date, end_date: date) -> None:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=f"Date range cannot exceed {MAX_REPORT_RANGE_DAYS} days",
         )
+
+
+@router.get("/{report_id}/pdf", summary="Download an AI audio report as PDF")
+async def download_audio_report_pdf(
+    report_id: uuid.UUID,
+    current_user: CurrentUser,
+    session: AsyncSession = Depends(get_db),
+) -> Response:
+    service = ReportService(session)
+    data = await service.get_audio_pdf_data(report_id=report_id)
+    if data is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+    try:
+        location = await WorkspaceService(session).require_accessible_location(
+            user_id=current_user.id,
+            location_id=data.location_id,
+        )
+    except WorkspaceAccessDeniedError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have access to this restaurant location.",
+        )
+    except WorkspaceNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+    if location.workspace_id != data.workspace_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Report not found")
+
+    pdf_service = AudioReportPdfService()
+    content = pdf_service.render(data)
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{pdf_service.filename(data)}"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )

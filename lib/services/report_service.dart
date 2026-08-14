@@ -35,12 +35,29 @@ class ReportService {
   }) async {
     final response = await _apiClient.download(
       _path('/reports/export.csv', startDate, endDate, workspaceId, locationId),
+      accept: 'text/csv',
     );
     final fallback =
         'reports_${_dateParameter(startDate)}_to_${_dateParameter(endDate)}.csv';
     return ReportExport(
       bytes: response.bytes,
       filename: _safeFilename(response.filename ?? fallback, fallback),
+    );
+  }
+
+  Future<ReportExport> exportAudioPdf({required String reportId}) async {
+    final response = await _apiClient.download(
+      '/reports/${Uri.encodeComponent(reportId)}/pdf',
+      accept: 'application/pdf',
+    );
+    const fallback = 'ai-audio-report.pdf';
+    return ReportExport(
+      bytes: response.bytes,
+      filename: _safeFilename(
+        response.filename ?? fallback,
+        fallback,
+        extension: 'pdf',
+      ),
     );
   }
 
@@ -68,9 +85,15 @@ class ReportService {
     return '${value.year}-$month-$day';
   }
 
-  static String _safeFilename(String value, String fallback) {
+  static String _safeFilename(
+    String value,
+    String fallback, {
+    String extension = 'csv',
+  }) {
     final safe = value.replaceAll(RegExp(r'[^A-Za-z0-9._-]'), '_');
     if (safe.isEmpty || safe == '.' || safe == '..') return fallback;
-    return safe.toLowerCase().endsWith('.csv') ? safe : '$safe.csv';
+    return safe.toLowerCase().endsWith('.$extension')
+        ? safe
+        : '$safe.$extension';
   }
 }

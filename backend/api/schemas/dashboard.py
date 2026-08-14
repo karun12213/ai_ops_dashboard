@@ -57,6 +57,7 @@ class DashboardActivityResponse(BaseModel):
     title: str
     actor: str
     category: str
+    severity: Optional[str] = None
 
 
 class DashboardResponse(BaseModel):

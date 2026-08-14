@@ -118,6 +118,7 @@ class _FakeDashboardService implements DashboardService {
     required DateTime serviceDate,
     required String workspaceId,
     required String locationId,
+    int activityLimit = 10,
   }) => onFetch(serviceDate);
 }
 

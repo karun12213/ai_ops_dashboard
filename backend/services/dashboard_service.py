@@ -113,6 +113,7 @@ class DashboardService:
                     title=activity.title,
                     actor=activity.actor,
                     category=activity.category,
+                    severity=activity.severity,
                 )
                 for activity in activities
             ],

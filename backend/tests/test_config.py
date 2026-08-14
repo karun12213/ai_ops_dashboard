@@ -1,4 +1,5 @@
 import unittest
+from decimal import Decimal
 
 from pydantic import ValidationError
 
@@ -87,6 +88,19 @@ class ProductionEnvironmentGuardTests(unittest.TestCase):
         settings = Settings(_env_file=None, app_env="development")
         self.assertTrue(settings.should_enable_docs)
         self.assertTrue(settings.should_auto_create_tables)
+
+
+class ProviderPricingSettingsTests(unittest.TestCase):
+    def test_default_provider_rates_match_configured_gpt4o_and_sarvam_rates(self) -> None:
+        settings = Settings(_env_file=None, app_env="development")
+
+        self.assertEqual(settings.sarvam_cost_per_audio_hour_inr, Decimal("30.00"))
+        self.assertEqual(settings.openai_input_cost_per_million_usd, Decimal("2.50"))
+        self.assertEqual(
+            settings.openai_cached_input_cost_per_million_usd,
+            Decimal("1.25"),
+        )
+        self.assertEqual(settings.openai_output_cost_per_million_usd, Decimal("10.00"))
 
 
 if __name__ == "__main__":

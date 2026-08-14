@@ -4,7 +4,15 @@ from typing import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api.routes import audio_uploads, auth, dashboard, health, reports, workspaces
+from backend.api.routes import (
+    audio_uploads,
+    auth,
+    cost_analytics,
+    dashboard,
+    health,
+    reports,
+    workspaces,
+)
 from backend.database.init_db import init_db
 from backend.middleware.security_headers import SecurityHeadersMiddleware
 from backend.utils.config import get_settings
@@ -41,6 +49,7 @@ app.add_middleware(
 app.include_router(health.router, prefix=settings.api_v1_prefix)
 app.include_router(auth.router, prefix=settings.api_v1_prefix)
 app.include_router(dashboard.router, prefix=settings.api_v1_prefix)
+app.include_router(cost_analytics.router, prefix=settings.api_v1_prefix)
 app.include_router(reports.router, prefix=settings.api_v1_prefix)
 app.include_router(audio_uploads.router, prefix=settings.api_v1_prefix)
 app.include_router(workspaces.router, prefix=settings.api_v1_prefix)

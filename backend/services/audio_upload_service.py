@@ -4,11 +4,13 @@ import uuid
 from pathlib import Path
 
 from fastapi import UploadFile
-from sqlalchemy import select
+from sqlalchemy import delete as sql_delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.audio_upload import AudioUpload
+from backend.models.dashboard import DashboardActivity
+from backend.models.report import AudioOperationsReport, ReportLocation
 from backend.models.user import User
 from backend.services.audio_validation import (
     UnsupportedAudioError,
@@ -34,7 +36,9 @@ class AudioUploadTooLargeError(ValueError):
 
 
 class DuplicateAudioUploadError(ValueError):
-    pass
+    def __init__(self, upload: AudioUpload) -> None:
+        super().__init__("This recording has already been processed")
+        self.upload = upload
 
 
 class InfectedAudioUploadError(ValueError):
@@ -59,7 +63,14 @@ class AudioUploadService:
         self.scanner = scanner
         self.max_upload_bytes = max_upload_bytes
 
-    async def upload(self, *, owner: User, file: UploadFile) -> AudioUpload:
+    async def upload(
+        self,
+        *,
+        owner: User,
+        location: ReportLocation,
+        language_code: str,
+        file: UploadFile,
+    ) -> AudioUpload:
         temporary_path: Path | None = None
         stored_key_to_cleanup: str | None = None
         record: AudioUpload | None = None
@@ -78,11 +89,17 @@ class AudioUploadService:
 
             existing = await self._find_duplicate(owner.id, sha256)
             if existing is not None and existing.status != "failed":
-                raise DuplicateAudioUploadError("This audio file has already been uploaded")
+                raise DuplicateAudioUploadError(existing)
 
             if existing is None:
                 record = AudioUpload(
                     owner_id=owner.id,
+                    workspace_id=location.workspace_id,
+                    location_id=location.id,
+                    language_code=language_code,
+                    detected_language_code=None,
+                    processing_stage="uploaded",
+                    retryable=True,
                     original_filename=safe_filename,
                     storage_key=f"{owner.id.hex}/{uuid.uuid4().hex}.{detected.extension}",
                     media_type=detected.media_type,
@@ -95,20 +112,39 @@ class AudioUploadService:
                 self.session.add(record)
             else:
                 record = existing
+                previous_language_code = record.language_code
                 record.original_filename = safe_filename
+                record.workspace_id = location.workspace_id
+                record.location_id = location.id
+                record.language_code = language_code
                 record.media_type = detected.media_type
                 record.extension = detected.extension
                 record.size_bytes = size_bytes
                 record.status = "processing"
                 record.scan_status = "not_configured"
+                record.processing_stage = "uploaded"
+                record.failure_stage = None
+                record.failure_code = None
+                record.failure_message = None
+                record.retryable = True
+                record.processed_at = None
+                if previous_language_code != language_code:
+                    record.english_transcript = None
+                    record.detected_language_code = None
+                    record.provider_job_id = None
+                    record.provider_job_state = None
+                    record.sarvam_job_id = None
 
             try:
                 await self.session.commit()
                 await self.session.refresh(record)
             except IntegrityError as exc:
                 await self.session.rollback()
-                raise DuplicateAudioUploadError(
-                    "This audio file has already been uploaded"
+                concurrent = await self._find_duplicate(owner.id, sha256)
+                if concurrent is not None:
+                    raise DuplicateAudioUploadError(concurrent) from exc
+                raise AudioUploadUnavailableError(
+                    "Audio upload metadata could not be saved"
                 ) from exc
 
             try:
@@ -134,7 +170,9 @@ class AudioUploadService:
                 await self.session.commit()
                 raise AudioUploadUnavailableError("Audio storage is unavailable") from exc
 
-            record.status = "ready"
+            # The object is durable, but the upload is not ready until the
+            # transcript, report, and Dashboard activity commit atomically.
+            record.status = "processing"
             await self.session.commit()
             await self.session.refresh(record)
             stored_key_to_cleanup = None
@@ -145,25 +183,66 @@ class AudioUploadService:
             if stored_key_to_cleanup is not None:
                 await self.storage.delete(stored_key_to_cleanup)
 
-    async def list_for_owner(self, *, owner_id: uuid.UUID, limit: int) -> list[AudioUpload]:
+    async def list_for_owner(
+        self,
+        *,
+        owner_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        location_id: uuid.UUID,
+        limit: int,
+    ) -> list[AudioUpload]:
         result = await self.session.execute(
             select(AudioUpload)
-            .where(AudioUpload.owner_id == owner_id)
+            .where(
+                AudioUpload.owner_id == owner_id,
+                AudioUpload.workspace_id == workspace_id,
+                AudioUpload.location_id == location_id,
+            )
             .order_by(AudioUpload.created_at.desc(), AudioUpload.id.desc())
             .limit(limit)
         )
         return list(result.scalars())
+
+    async def list_for_location(
+        self,
+        *,
+        workspace_id: uuid.UUID,
+        location_id: uuid.UUID,
+        limit: int,
+    ) -> list[tuple[AudioUpload, AudioOperationsReport | None, str]]:
+        """Return persisted location history, including completed report metadata."""
+        rows = (
+            await self.session.execute(
+                select(AudioUpload, AudioOperationsReport, ReportLocation.name)
+                .join(ReportLocation, ReportLocation.id == AudioUpload.location_id)
+                .outerjoin(
+                    AudioOperationsReport,
+                    AudioOperationsReport.upload_id == AudioUpload.id,
+                )
+                .where(
+                    AudioUpload.workspace_id == workspace_id,
+                    AudioUpload.location_id == location_id,
+                )
+                .order_by(AudioUpload.created_at.desc(), AudioUpload.id.desc())
+                .limit(limit)
+            )
+        ).all()
+        return [(upload, report, location_name) for upload, report, location_name in rows]
 
     async def get_ready_for_owner(
         self,
         *,
         owner_id: uuid.UUID,
         upload_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        location_id: uuid.UUID,
     ) -> AudioUpload | None:
         result = await self.session.execute(
             select(AudioUpload).where(
                 AudioUpload.id == upload_id,
                 AudioUpload.owner_id == owner_id,
+                AudioUpload.workspace_id == workspace_id,
+                AudioUpload.location_id == location_id,
                 AudioUpload.status == "ready",
             )
         )
@@ -172,16 +251,75 @@ class AudioUploadService:
             return None
         return record
 
+    async def get_ready_for_location(
+        self,
+        *,
+        upload_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        location_id: uuid.UUID,
+    ) -> AudioUpload | None:
+        result = await self.session.execute(
+            select(AudioUpload).where(
+                AudioUpload.id == upload_id,
+                AudioUpload.workspace_id == workspace_id,
+                AudioUpload.location_id == location_id,
+                AudioUpload.status == "ready",
+            )
+        )
+        record = result.scalar_one_or_none()
+        if record is None or not await self.storage.exists(record.storage_key):
+            return None
+        return record
+
+    async def get_playable_for_location(
+        self,
+        *,
+        upload_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        location_id: uuid.UUID,
+    ) -> AudioUpload | None:
+        result = await self.session.execute(
+            select(AudioUpload).where(
+                AudioUpload.id == upload_id,
+                AudioUpload.workspace_id == workspace_id,
+                AudioUpload.location_id == location_id,
+                AudioUpload.status.in_(("processing", "ready", "failed")),
+            )
+        )
+        record = result.scalar_one_or_none()
+        if record is None or not await self.storage.exists(record.storage_key):
+            return None
+        return record
+
+    async def get_for_location(
+        self,
+        *,
+        upload_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        location_id: uuid.UUID,
+    ) -> AudioUpload | None:
+        return await self.session.scalar(
+            select(AudioUpload).where(
+                AudioUpload.id == upload_id,
+                AudioUpload.workspace_id == workspace_id,
+                AudioUpload.location_id == location_id,
+            )
+        )
+
     async def get_for_owner(
         self,
         *,
         owner_id: uuid.UUID,
         upload_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        location_id: uuid.UUID,
     ) -> AudioUpload | None:
         result = await self.session.execute(
             select(AudioUpload).where(
                 AudioUpload.id == upload_id,
                 AudioUpload.owner_id == owner_id,
+                AudioUpload.workspace_id == workspace_id,
+                AudioUpload.location_id == location_id,
             )
         )
         return result.scalar_one_or_none()
@@ -191,14 +329,31 @@ class AudioUploadService:
         *,
         owner_id: uuid.UUID,
         upload_id: uuid.UUID,
+        workspace_id: uuid.UUID,
+        location_id: uuid.UUID,
     ) -> bool:
-        record = await self.get_for_owner(owner_id=owner_id, upload_id=upload_id)
+        record = await self.get_for_owner(
+            owner_id=owner_id,
+            upload_id=upload_id,
+            workspace_id=workspace_id,
+            location_id=location_id,
+        )
         if record is None:
             return False
         try:
             await self.storage.delete(record.storage_key)
         except Exception as exc:
             raise AudioUploadUnavailableError("Audio storage is unavailable") from exc
+        await self.session.execute(
+            sql_delete(DashboardActivity).where(
+                DashboardActivity.audio_upload_id == record.id
+            )
+        )
+        await self.session.execute(
+            sql_delete(AudioOperationsReport).where(
+                AudioOperationsReport.upload_id == record.id
+            )
+        )
         await self.session.delete(record)
         await self.session.commit()
         return True

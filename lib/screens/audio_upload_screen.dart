@@ -1,10 +1,42 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../models/audio_upload.dart';
 import '../providers/audio_upload_provider.dart';
+import '../providers/report_provider.dart';
+import '../routes/app_router.dart';
 import '../services/audio_file_picker.dart';
+import '../widgets/api_cost_report_card.dart';
+import '../widgets/audio_bytes_player.dart';
 import '../widgets/page_header.dart';
+
+const _audioLanguages = <(String, String)>[
+  ('unknown', 'Auto detect'),
+  ('en-IN', 'English'),
+  ('hi-IN', 'Hindi'),
+  ('ne-IN', 'Nepali'),
+  ('ta-IN', 'Tamil'),
+  ('te-IN', 'Telugu'),
+  ('bn-IN', 'Bengali'),
+  ('kn-IN', 'Kannada'),
+  ('ml-IN', 'Malayalam'),
+  ('mr-IN', 'Marathi'),
+  ('gu-IN', 'Gujarati'),
+  ('pa-IN', 'Punjabi'),
+  ('od-IN', 'Odia'),
+  ('as-IN', 'Assamese'),
+  ('ur-IN', 'Urdu'),
+  ('kok-IN', 'Konkani'),
+  ('ks-IN', 'Kashmiri'),
+  ('sd-IN', 'Sindhi'),
+  ('sa-IN', 'Sanskrit'),
+  ('sat-IN', 'Santali'),
+  ('mni-IN', 'Manipuri'),
+  ('brx-IN', 'Bodo'),
+  ('mai-IN', 'Maithili'),
+  ('doi-IN', 'Dogri'),
+];
 
 class AudioUploadScreen extends ConsumerWidget {
   const AudioUploadScreen({super.key});
@@ -25,7 +57,7 @@ class AudioUploadScreen extends ConsumerWidget {
             PageHeader(
               title: 'Audio upload',
               description:
-                  'Securely store operational recordings for your account.',
+                  'Translate operational recordings to English and create an AI report.',
               action: OutlinedButton.icon(
                 key: const Key('audio-refresh-button'),
                 onPressed: state.isLoadingHistory ? null : notifier.refresh,
@@ -42,6 +74,7 @@ class AudioUploadScreen extends ConsumerWidget {
                     onPick: notifier.pickAudio,
                     onRemove: notifier.clearSelection,
                     onUpload: () => _upload(context, notifier),
+                    onLanguageChanged: notifier.selectLanguage,
                   ),
                   const _UploadGuidance(),
                 ];
@@ -70,9 +103,47 @@ class AudioUploadScreen extends ConsumerWidget {
                 message: state.operationError!,
                 canRetry:
                     state.selectedFile != null &&
-                    state.transferPhase == AudioTransferPhase.failed,
+                    state.transferPhase == AudioTransferPhase.failed &&
+                    state.existingUploadId == null,
                 onRetry: () => _upload(context, notifier, retry: true),
                 onDismiss: notifier.dismissOperationError,
+                onViewExisting: state.existingReportId == null
+                    ? null
+                    : () => context.go(
+                        Uri(
+                          path: AppRoutes.reports,
+                          queryParameters: {
+                            'report_id': state.existingReportId!,
+                          },
+                        ).toString(),
+                      ),
+              ),
+            ],
+            if (state.lastProcessingResult case final result?) ...[
+              const SizedBox(height: 20),
+              _ProcessingResultCard(
+                result: result,
+                onViewDashboard: () => context.go(AppRoutes.dashboard),
+                onViewReport: () => context.go(
+                  Uri(
+                    path: AppRoutes.reports,
+                    queryParameters: {'report_id': result.reportId},
+                  ).toString(),
+                ),
+                onProcessAnother: () async {
+                  await notifier.processAnother();
+                },
+                onDownloadPdf: () =>
+                    _downloadPdf(context, ref, result.reportId),
+                loadAudio: () async {
+                  final audio = await notifier.fetchStoredAudio(
+                    result.upload.id,
+                  );
+                  return AudioBytesSource(
+                    bytes: audio.bytes,
+                    mediaType: audio.mediaType,
+                  );
+                },
               ),
             ],
             const SizedBox(height: 28),
@@ -80,6 +151,20 @@ class AudioUploadScreen extends ConsumerWidget {
               state: state,
               onRetry: notifier.refresh,
               onDelete: (upload) => _confirmDelete(context, notifier, upload),
+              onRetryProcessing: notifier.retryStored,
+              onViewReport: (reportId) => context.go(
+                Uri(
+                  path: AppRoutes.reports,
+                  queryParameters: {'report_id': reportId},
+                ).toString(),
+              ),
+              loadAudio: (uploadId) async {
+                final audio = await notifier.fetchStoredAudio(uploadId);
+                return AudioBytesSource(
+                  bytes: audio.bytes,
+                  mediaType: audio.mediaType,
+                );
+              },
             ),
           ],
         ),
@@ -94,9 +179,11 @@ class AudioUploadScreen extends ConsumerWidget {
   }) async {
     final uploaded = retry ? await notifier.retry() : await notifier.upload();
     if (!context.mounted || !uploaded) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Audio upload completed.')));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Processing complete. Your report is ready.'),
+      ),
+    );
   }
 
   static Future<void> _confirmDelete(
@@ -131,6 +218,28 @@ class AudioUploadScreen extends ConsumerWidget {
       context,
     ).showSnackBar(const SnackBar(content: Text('Audio upload deleted.')));
   }
+
+  static Future<void> _downloadPdf(
+    BuildContext context,
+    WidgetRef ref,
+    String reportId,
+  ) async {
+    try {
+      final export = await ref
+          .read(reportServiceProvider)
+          .exportAudioPdf(reportId: reportId);
+      await ref.read(pdfExportSaverProvider).save(export);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('PDF report downloaded.')));
+    } catch (_) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('PDF download failed. Please try again.')),
+      );
+    }
+  }
 }
 
 class _UploadCard extends StatelessWidget {
@@ -139,17 +248,21 @@ class _UploadCard extends StatelessWidget {
     required this.onPick,
     required this.onRemove,
     required this.onUpload,
+    required this.onLanguageChanged,
   });
 
   final AudioUploadState state;
   final Future<void> Function() onPick;
   final VoidCallback onRemove;
   final Future<void> Function() onUpload;
+  final ValueChanged<String> onLanguageChanged;
 
   bool get _isBusy =>
       state.transferPhase == AudioTransferPhase.picking ||
       state.transferPhase == AudioTransferPhase.uploading ||
-      state.transferPhase == AudioTransferPhase.processing;
+      state.transferPhase == AudioTransferPhase.transcribing ||
+      state.transferPhase == AudioTransferPhase.analyzing ||
+      state.transferPhase == AudioTransferPhase.savingReport;
 
   @override
   Widget build(BuildContext context) {
@@ -170,7 +283,7 @@ class _UploadCard extends StatelessWidget {
             const SizedBox(height: 18),
             InkWell(
               key: const Key('audio-file-drop-zone'),
-              onTap: _isBusy ? null : onPick,
+              onTap: _isBusy || file != null ? null : onPick,
               borderRadius: BorderRadius.circular(16),
               child: Container(
                 constraints: const BoxConstraints(minHeight: 270),
@@ -191,8 +304,30 @@ class _UploadCard extends StatelessWidget {
                       ),
               ),
             ),
-            if (state.transferPhase == AudioTransferPhase.uploading ||
-                state.transferPhase == AudioTransferPhase.processing) ...[
+            const SizedBox(height: 18),
+            DropdownButtonFormField<String>(
+              key: const Key('audio-language-selector'),
+              initialValue: state.languageCode,
+              decoration: const InputDecoration(
+                labelText: 'Source language',
+                helperText:
+                    'Choose Auto detect when the spoken language is unknown.',
+              ),
+              items: [
+                for (final language in _audioLanguages)
+                  DropdownMenuItem(
+                    value: language.$1,
+                    child: Text(language.$2),
+                  ),
+              ],
+              onChanged: _isBusy
+                  ? null
+                  : (value) {
+                      if (value != null) onLanguageChanged(value);
+                    },
+            ),
+            if (_isBusy &&
+                state.transferPhase != AudioTransferPhase.picking) ...[
               const SizedBox(height: 18),
               LinearProgressIndicator(
                 key: const Key('audio-upload-progress'),
@@ -202,9 +337,7 @@ class _UploadCard extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                state.transferPhase == AudioTransferPhase.uploading
-                    ? 'Uploading ${(state.uploadProgress * 100).round()}%'
-                    : 'Finishing secure upload…',
+                _processingMessage(state),
                 textAlign: TextAlign.center,
                 style: TextStyle(color: scheme.onSurfaceVariant),
               ),
@@ -213,23 +346,19 @@ class _UploadCard extends StatelessWidget {
             FilledButton.icon(
               key: const Key('audio-upload-button'),
               onPressed: state.canUpload ? onUpload : null,
-              icon:
-                  state.transferPhase == AudioTransferPhase.uploading ||
-                      state.transferPhase == AudioTransferPhase.processing
+              icon: _isBusy
                   ? const SizedBox.square(
                       dimension: 18,
                       child: CircularProgressIndicator(strokeWidth: 2),
                     )
                   : const Icon(Icons.cloud_upload_outlined),
               label: Text(
-                state.transferPhase == AudioTransferPhase.processing
-                    ? 'Processing…'
-                    : state.transferPhase == AudioTransferPhase.uploading
-                    ? 'Uploading…'
+                _isBusy
+                    ? 'Processing audio…'
                     : state.transferPhase == AudioTransferPhase.failed &&
                           file != null
                     ? 'Retry upload'
-                    : 'Upload audio',
+                    : 'Process Audio',
               ),
             ),
           ],
@@ -237,6 +366,16 @@ class _UploadCard extends StatelessWidget {
       ),
     );
   }
+
+  static String _processingMessage(AudioUploadState state) =>
+      switch (state.transferPhase) {
+        AudioTransferPhase.uploading =>
+          'Uploading recording... ${(state.uploadProgress * 100).round()}%',
+        AudioTransferPhase.transcribing => 'Converting speech to English...',
+        AudioTransferPhase.analyzing => 'Generating AI operations report...',
+        AudioTransferPhase.savingReport => 'Saving report...',
+        _ => 'Preparing recording...',
+      };
 }
 
 class _EmptySelection extends StatelessWidget {
@@ -329,6 +468,15 @@ class _SelectedFile extends StatelessWidget {
             _formatBytes(file.sizeBytes),
             style: TextStyle(color: scheme.onSurfaceVariant),
           ),
+          const SizedBox(height: 14),
+          AudioBytesPlayer(
+            key: Key('selected-audio-player-${file.name}'),
+            sourceKey: '${file.name}:${file.sizeBytes}',
+            load: () async => AudioBytesSource(
+              bytes: await file.readBytes(),
+              mediaType: file.effectiveMediaType,
+            ),
+          ),
           const SizedBox(height: 18),
           TextButton.icon(
             key: const Key('audio-remove-selection-button'),
@@ -348,12 +496,14 @@ class _OperationError extends StatelessWidget {
     required this.canRetry,
     required this.onRetry,
     required this.onDismiss,
+    this.onViewExisting,
   });
 
   final String message;
   final bool canRetry;
   final Future<void> Function() onRetry;
   final VoidCallback onDismiss;
+  final VoidCallback? onViewExisting;
 
   @override
   Widget build(BuildContext context) {
@@ -378,6 +528,12 @@ class _OperationError extends StatelessWidget {
                 onPressed: onRetry,
                 child: const Text('Retry'),
               ),
+            if (onViewExisting != null)
+              TextButton(
+                key: const Key('audio-view-existing-report-button'),
+                onPressed: onViewExisting,
+                child: const Text('View Existing Report'),
+              ),
             IconButton(
               tooltip: 'Dismiss error',
               onPressed: onDismiss,
@@ -390,16 +546,197 @@ class _OperationError extends StatelessWidget {
   }
 }
 
+class _ProcessingResultCard extends StatelessWidget {
+  const _ProcessingResultCard({
+    required this.result,
+    required this.onViewDashboard,
+    required this.onViewReport,
+    required this.onDownloadPdf,
+    required this.onProcessAnother,
+    required this.loadAudio,
+  });
+
+  final AudioUploadProcessingResult result;
+  final VoidCallback onViewDashboard;
+  final VoidCallback onViewReport;
+  final Future<void> Function() onDownloadPdf;
+  final Future<void> Function() onProcessAnother;
+  final Future<AudioBytesSource> Function() loadAudio;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final analysis = result.analysis;
+    return Card(
+      key: const Key('audio-processing-result'),
+      child: Padding(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.check_circle_rounded, color: scheme.primary),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'PROCESSING COMPLETE',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      color: scheme.primary,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 0.6,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 22),
+            Text(
+              'Audio',
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            AudioBytesPlayer(
+              key: Key('completed-audio-player-${result.upload.id}'),
+              sourceKey: result.upload.id,
+              load: loadAudio,
+            ),
+            const Divider(height: 36),
+            Text(
+              'ENGLISH TRANSCRIPT',
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 8),
+            SelectableText(result.transcript),
+            const Divider(height: 36),
+            Text(
+              'AI OPERATIONS REPORT',
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 14),
+            _ResultField(label: 'Summary', value: analysis.summary),
+            _ResultField(
+              label: 'Category',
+              value: _titleCase(analysis.category),
+            ),
+            _ResultField(
+              label: 'Severity',
+              value: _titleCase(analysis.severity.name),
+            ),
+            _ResultField(
+              label: 'Requires attention',
+              value: analysis.requiresAttention ? 'Yes' : 'No',
+            ),
+            _ResultField(
+              label: 'Recommended action',
+              value: analysis.recommendedAction,
+            ),
+            _ResultField(label: 'Location', value: result.locationName),
+            _ResultField(
+              label: 'Processed',
+              value: _formatDateTime(result.processedAt),
+            ),
+            _ResultField(label: 'Source', value: result.source, isLast: true),
+            const SizedBox(height: 22),
+            ApiCostReportCard(
+              key: const Key('audio-processing-api-cost-report'),
+              cost: result.upload.apiCost,
+            ),
+            const SizedBox(height: 20),
+            Wrap(
+              spacing: 10,
+              runSpacing: 10,
+              children: [
+                FilledButton.icon(
+                  key: const Key('audio-download-pdf-button'),
+                  onPressed: onDownloadPdf,
+                  icon: const Icon(Icons.picture_as_pdf_outlined),
+                  label: const Text('Download PDF'),
+                ),
+                FilledButton.icon(
+                  key: const Key('audio-view-dashboard-button'),
+                  onPressed: onViewDashboard,
+                  icon: const Icon(Icons.dashboard_outlined),
+                  label: const Text('View Dashboard'),
+                ),
+                OutlinedButton.icon(
+                  key: const Key('audio-view-report-button'),
+                  onPressed: onViewReport,
+                  icon: const Icon(Icons.description_outlined),
+                  label: const Text('View Full Report'),
+                ),
+                TextButton.icon(
+                  key: const Key('audio-process-another-button'),
+                  onPressed: () async {
+                    await onProcessAnother();
+                  },
+                  icon: const Icon(Icons.add_rounded),
+                  label: const Text('Process Another Audio'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ResultField extends StatelessWidget {
+  const _ResultField({
+    required this.label,
+    required this.value,
+    this.isLast = false,
+  });
+
+  final String label;
+  final String value;
+  final bool isLast;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: isLast ? 0 : 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 150,
+            child: Text(
+              '$label:',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: SelectableText(value)),
+        ],
+      ),
+    );
+  }
+}
+
 class _UploadHistory extends StatelessWidget {
   const _UploadHistory({
     required this.state,
     required this.onRetry,
     required this.onDelete,
+    required this.onRetryProcessing,
+    required this.onViewReport,
+    required this.loadAudio,
   });
 
   final AudioUploadState state;
   final Future<void> Function() onRetry;
   final Future<void> Function(AudioUpload upload) onDelete;
+  final Future<bool> Function(String uploadId) onRetryProcessing;
+  final ValueChanged<String> onViewReport;
+  final Future<AudioBytesSource> Function(String uploadId) loadAudio;
 
   @override
   Widget build(BuildContext context) {
@@ -443,6 +780,11 @@ class _UploadHistory extends StatelessWidget {
               upload: upload,
               isDeleting: state.deletingIds.contains(upload.id),
               onDelete: () => onDelete(upload),
+              onRetryProcessing: () => onRetryProcessing(upload.id),
+              onViewReport: upload.reportId == null
+                  ? null
+                  : () => onViewReport(upload.reportId!),
+              loadAudio: () => loadAudio(upload.id),
             ),
             const SizedBox(height: 10),
           ],
@@ -512,11 +854,17 @@ class _HistoryItem extends StatelessWidget {
     required this.upload,
     required this.isDeleting,
     required this.onDelete,
+    required this.onRetryProcessing,
+    required this.onViewReport,
+    required this.loadAudio,
   });
 
   final AudioUpload upload;
   final bool isDeleting;
   final Future<void> Function() onDelete;
+  final Future<bool> Function() onRetryProcessing;
+  final VoidCallback? onViewReport;
+  final Future<AudioBytesSource> Function() loadAudio;
 
   @override
   Widget build(BuildContext context) {
@@ -538,13 +886,56 @@ class _HistoryItem extends StatelessWidget {
             color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
         ),
+        const SizedBox(height: 5),
+        Text(
+          upload.status == AudioUploadStatus.ready
+              ? 'Processed ${_formatDateTime(upload.processedAt ?? upload.updatedAt)} · '
+                    '${upload.transcriptAvailable ? 'English transcript available' : 'Transcript unavailable'} · '
+                    'Severity ${_titleCase(upload.severity?.name ?? 'unknown')}'
+              : upload.status == AudioUploadStatus.failed
+              ? '${upload.failureMessage ?? 'Processing failed.'}'
+                    '${upload.failureStage == null ? '' : ' Stage: ${_titleCase(upload.failureStage!)}.'}'
+              : 'Processing ${_titleCase(upload.processingStage.name)}',
+          style: TextStyle(
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
+        ),
       ],
     );
-    final actions = Row(
-      mainAxisSize: MainAxisSize.min,
+    final actions = Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         _StatusChip(status: upload.status),
-        const SizedBox(width: 8),
+        if (upload.status == AudioUploadStatus.ready ||
+            upload.status == AudioUploadStatus.failed)
+          AudioBytesPlayer(
+            key: Key('stored-audio-player-${upload.id}'),
+            sourceKey: upload.id,
+            load: loadAudio,
+            compact: true,
+          ),
+        if (onViewReport != null)
+          TextButton.icon(
+            key: Key('audio-view-report-${upload.id}'),
+            onPressed: onViewReport,
+            icon: const Icon(Icons.description_outlined),
+            label: const Text('View Report'),
+          ),
+        if (upload.status == AudioUploadStatus.failed && upload.retryable)
+          TextButton.icon(
+            key: Key('audio-retry-processing-${upload.id}'),
+            onPressed: () async {
+              await onRetryProcessing();
+            },
+            icon: const Icon(Icons.refresh_rounded),
+            label: Text(
+              upload.transcriptAvailable
+                  ? 'Retry report generation'
+                  : 'Retry processing',
+            ),
+          ),
         IconButton(
           key: Key('audio-delete-${upload.id}'),
           tooltip: 'Delete ${upload.originalFilename}',
@@ -619,7 +1010,7 @@ class _StatusChip extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final (label, color) = switch (status) {
       AudioUploadStatus.processing => ('Processing', scheme.tertiary),
-      AudioUploadStatus.ready => ('Ready', scheme.primary),
+      AudioUploadStatus.ready => ('Processed', scheme.primary),
       AudioUploadStatus.failed => ('Failed', scheme.error),
       AudioUploadStatus.quarantined => ('Quarantined', scheme.error),
     };
@@ -722,4 +1113,17 @@ String _formatDate(DateTime value) {
   final month = local.month.toString().padLeft(2, '0');
   final day = local.day.toString().padLeft(2, '0');
   return '${local.year}-$month-$day';
+}
+
+String _formatDateTime(DateTime value) {
+  final local = value.toLocal();
+  final hour = local.hour % 12 == 0 ? 12 : local.hour % 12;
+  final minute = local.minute.toString().padLeft(2, '0');
+  final period = local.hour < 12 ? 'AM' : 'PM';
+  return '${_formatDate(local)} $hour:$minute $period';
+}
+
+String _titleCase(String value) {
+  if (value.isEmpty) return value;
+  return '${value[0].toUpperCase()}${value.substring(1)}';
 }

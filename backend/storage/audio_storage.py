@@ -25,7 +25,9 @@ class AudioObjectStorage(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def iter_bytes(self, storage_key: str, chunk_size: int = 1024 * 1024) -> AsyncIterator[bytes]:
+    async def iter_bytes(
+        self, storage_key: str, chunk_size: int = 1024 * 1024
+    ) -> AsyncIterator[bytes]:
         raise NotImplementedError
 
     @abstractmethod
@@ -40,9 +42,16 @@ class AudioObjectStorage(ABC):
     async def discard_temporary(self, temporary_path: Path | None) -> None:
         raise NotImplementedError
 
+    @abstractmethod
+    def get_path(self, storage_key: str) -> Path:
+        """Return a validated local path or reject unsupported storage adapters."""
+        raise NotImplementedError
+
 
 class LocalAudioStorage(AudioObjectStorage):
-    _KEY_PATTERN = re.compile(r"^[0-9a-f]{32}/[0-9a-f]{32}\.(?:mp3|wav|m4a|aac|ogg)$")
+    _KEY_PATTERN = re.compile(
+        r"^[0-9a-f]{32}/[0-9a-f]{32}\.(?:mp3|wav|m4a|aac|ogg|opus|mp4)$"
+    )
 
     def __init__(self, root: str | Path) -> None:
         self.root = Path(root).resolve()
@@ -61,7 +70,12 @@ class LocalAudioStorage(AudioObjectStorage):
         source = temporary_path.resolve()
         self._require_temporary(source)
         destination = self._resolve_key(storage_key)
-        await asyncio.to_thread(destination.parent.mkdir, parents=True, exist_ok=True, mode=0o700)
+        await asyncio.to_thread(
+            destination.parent.mkdir,
+            parents=True,
+            exist_ok=True,
+            mode=0o700,
+        )
         await asyncio.to_thread(os.replace, source, destination)
 
     async def iter_bytes(
@@ -101,6 +115,12 @@ class LocalAudioStorage(AudioObjectStorage):
             await asyncio.to_thread(path.unlink)
         except FileNotFoundError:
             return
+
+    def get_path(self, storage_key: str) -> Path:
+        path = self._resolve_key(storage_key)
+        if not path.is_file():
+            raise AudioObjectNotFoundError(storage_key)
+        return path
 
     def _resolve_key(self, storage_key: str) -> Path:
         if not self._KEY_PATTERN.fullmatch(storage_key):

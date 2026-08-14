@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:ai_ops_dashboard/models/audio_upload.dart';
 import 'package:ai_ops_dashboard/providers/audio_upload_provider.dart';
@@ -13,6 +14,8 @@ void main() {
     final notifier = AudioUploadNotifier(
       repository,
       _FakePicker(null),
+      activeWorkspaceId: 'workspace-1',
+      activeLocationId: 'location-1',
       loadOnCreate: false,
     );
 
@@ -38,6 +41,8 @@ void main() {
     final notifier = AudioUploadNotifier(
       repository,
       _FakePicker(oversized),
+      activeWorkspaceId: 'workspace-1',
+      activeLocationId: 'location-1',
       loadOnCreate: false,
     );
 
@@ -50,12 +55,16 @@ void main() {
   });
 
   test('exposes uploading and processing progress then adds history', () async {
-    final completion = Completer<AudioUpload>();
+    final completion = Completer<AudioUploadProcessingResult>();
     final repository = _FakeRepository()..uploadCompletion = completion;
     final selection = _file();
+    var dashboardRefreshes = 0;
     final notifier = AudioUploadNotifier(
       repository,
       _FakePicker(selection),
+      activeWorkspaceId: 'workspace-1',
+      activeLocationId: 'location-1',
+      onProcessed: () => dashboardRefreshes += 1,
       loadOnCreate: false,
     );
     await notifier.pickAudio();
@@ -63,15 +72,19 @@ void main() {
     final upload = notifier.upload();
     await Future<void>.delayed(Duration.zero);
 
-    expect(notifier.state.transferPhase, AudioTransferPhase.processing);
+    expect(notifier.state.transferPhase, AudioTransferPhase.transcribing);
     expect(notifier.state.uploadProgress, 1);
     expect(notifier.state.selectedFile, same(selection));
 
-    completion.complete(_audio);
+    completion.complete(_result);
     expect(await upload, isTrue);
-    expect(notifier.state.transferPhase, AudioTransferPhase.idle);
+    expect(notifier.state.transferPhase, AudioTransferPhase.completed);
     expect(notifier.state.selectedFile, isNull);
     expect(notifier.state.history, [_audio]);
+    expect(notifier.state.lastProcessingResult?.activityId, _result.activityId);
+    expect(repository.locationIds, ['location-1']);
+    expect(repository.languageCodes, [defaultAudioLanguageCode]);
+    expect(dashboardRefreshes, 1);
   });
 
   test(
@@ -83,6 +96,8 @@ void main() {
       final notifier = AudioUploadNotifier(
         repository,
         _FakePicker(selection),
+        activeWorkspaceId: 'workspace-1',
+        activeLocationId: 'location-1',
         loadOnCreate: false,
       );
       await notifier.pickAudio();
@@ -94,7 +109,7 @@ void main() {
 
       repository
         ..uploadError = null
-        ..uploadResult = _audio;
+        ..uploadResult = _result;
       expect(await notifier.retry(), isTrue);
       expect(repository.uploadCalls, 2);
 
@@ -108,6 +123,92 @@ void main() {
       expect(notifier.state.history, isEmpty);
     },
   );
+
+  test(
+    'dashboard refresh failure does not overturn a completed upload',
+    () async {
+      final repository = _FakeRepository()..uploadResult = _result;
+      final notifier = AudioUploadNotifier(
+        repository,
+        _FakePicker(_file()),
+        activeWorkspaceId: 'workspace-1',
+        activeLocationId: 'location-1',
+        onProcessed: () => throw StateError('dashboard refresh failed'),
+        loadOnCreate: false,
+      );
+      await notifier.pickAudio();
+
+      expect(await notifier.upload(), isTrue);
+      expect(notifier.state.transferPhase, AudioTransferPhase.completed);
+      expect(notifier.state.operationError, isNull);
+      expect(notifier.state.selectedFile, isNull);
+      expect(notifier.state.history, [_audio]);
+      expect(notifier.state.lastProcessingResult, same(_result));
+    },
+  );
+
+  test('blocks upload when no active location is available', () async {
+    final repository = _FakeRepository();
+    final notifier = AudioUploadNotifier(
+      repository,
+      _FakePicker(_file()),
+      activeWorkspaceId: 'workspace-1',
+      activeLocationId: null,
+      loadOnCreate: false,
+    );
+    await notifier.pickAudio();
+
+    expect(await notifier.upload(), isFalse);
+    expect(repository.uploadCalls, 0);
+    expect(
+      notifier.state.operationError,
+      'A workspace location is required before uploading.',
+    );
+  });
+
+  test(
+    'duplicate completion exposes the existing report without retrying providers',
+    () async {
+      final repository = _FakeRepository()
+        ..uploadError = const ApiException(
+          'This recording has already been processed. Open the existing report.',
+          statusCode: 409,
+          code: 'duplicate_completed',
+          existingUploadId: 'existing-upload',
+          existingReportId: 'existing-report',
+        );
+      final notifier = AudioUploadNotifier(
+        repository,
+        _FakePicker(_file()),
+        activeWorkspaceId: 'workspace-1',
+        activeLocationId: 'location-1',
+        loadOnCreate: false,
+      );
+      await notifier.pickAudio();
+
+      expect(await notifier.upload(), isFalse);
+      expect(notifier.state.existingUploadId, 'existing-upload');
+      expect(notifier.state.existingReportId, 'existing-report');
+      expect(notifier.state.transferPhase, AudioTransferPhase.failed);
+      expect(repository.uploadCalls, 1);
+    },
+  );
+
+  test('uses the selected Sarvam language code', () async {
+    final repository = _FakeRepository();
+    final notifier = AudioUploadNotifier(
+      repository,
+      _FakePicker(_file()),
+      activeWorkspaceId: 'workspace-1',
+      activeLocationId: 'location-1',
+      loadOnCreate: false,
+    );
+    notifier.selectLanguage('hi-IN');
+    await notifier.pickAudio();
+
+    expect(await notifier.upload(), isTrue);
+    expect(repository.languageCodes, ['hi-IN']);
+  });
 }
 
 PickedAudioFile _file() => PickedAudioFile(
@@ -128,6 +229,25 @@ final _audio = AudioUpload(
   updatedAt: DateTime.utc(2026, 8, 3, 10, 0, 1),
 );
 
+final _result = AudioUploadProcessingResult(
+  upload: _audio,
+  transcript: 'The dinner station is running low on plates.',
+  analysis: const AudioAnalysis(
+    summary: 'Restock plates at the dinner station',
+    category: 'inventory',
+    severity: AudioAnalysisSeverity.high,
+    requiresAttention: true,
+    recommendedAction: 'Move clean plates to the station.',
+  ),
+  activityId: 'fe67a667-135d-46e6-9c1a-04ba3fc7d258',
+  reportId: '9ec4682a-cd7c-4d2f-b462-f8280638a29d',
+  workspaceId: 'workspace-1',
+  locationId: 'location-1',
+  locationName: 'Main Floor',
+  processedAt: DateTime.utc(2026, 8, 3, 10, 0, 2),
+  source: 'AI Audio Monitor',
+);
+
 class _FakePicker implements AudioFilePicker {
   _FakePicker(this.result);
 
@@ -140,33 +260,70 @@ class _FakePicker implements AudioFilePicker {
 class _FakeRepository implements AudioUploadRepository {
   List<AudioUpload> history = [];
   Object? historyError;
-  AudioUpload uploadResult = _audio;
+  AudioUploadProcessingResult uploadResult = _result;
   Object? uploadError;
   Object? deleteError;
-  Completer<AudioUpload>? uploadCompletion;
+  Completer<AudioUploadProcessingResult>? uploadCompletion;
   int uploadCalls = 0;
+  final locationIds = <String>[];
+  final languageCodes = <String>[];
 
   @override
-  Future<List<AudioUpload>> fetchHistory({int limit = 50}) async {
+  Future<List<AudioUpload>> fetchHistory({
+    required String workspaceId,
+    required String locationId,
+    int limit = 50,
+  }) async {
+    expect(workspaceId, 'workspace-1');
+    expect(locationId, 'location-1');
     if (historyError case final error?) throw error;
     return history;
   }
 
   @override
-  Future<AudioUpload> upload(
+  Future<AudioUploadProcessingResult> upload(
     PickedAudioFile file, {
+    required String locationId,
+    required String languageCode,
     void Function(double progress)? onProgress,
   }) async {
     uploadCalls += 1;
+    locationIds.add(locationId);
+    languageCodes.add(languageCode);
     onProgress?.call(0.4);
     onProgress?.call(1);
     if (uploadError case final error?) throw error;
     final completion = uploadCompletion;
-    return completion == null ? uploadResult : completion.future;
+    final result = completion == null ? uploadResult : await completion.future;
+    history = [result.upload];
+    return result;
   }
 
   @override
-  Future<void> delete(String uploadId) async {
+  Future<AudioUploadProcessingResult> retryProcessing(
+    String uploadId, {
+    required String workspaceId,
+    required String locationId,
+  }) async => uploadResult;
+
+  @override
+  Future<StoredAudioData> fetchAudio(
+    String uploadId, {
+    required String workspaceId,
+    required String locationId,
+  }) async => StoredAudioData(
+    bytes: Uint8List.fromList([73, 68, 51]),
+    mediaType: 'audio/mpeg',
+  );
+
+  @override
+  Future<void> delete(
+    String uploadId, {
+    required String workspaceId,
+    required String locationId,
+  }) async {
+    expect(workspaceId, 'workspace-1');
+    expect(locationId, 'location-1');
     if (deleteError case final error?) throw error;
   }
 }

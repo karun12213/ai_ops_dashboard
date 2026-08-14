@@ -67,8 +67,8 @@ class _WorkspaceSetupScreenState extends ConsumerState<WorkspaceSetupScreen> {
                     createsWorkspace
                         ? 'Use your real restaurant and location names. Existing data is never assigned automatically.'
                         : canCreateLocation
-                        ? 'Dashboard and Reports require an explicitly owned location.'
-                        : 'A workspace owner must add a location before Dashboard and Reports are available.',
+                        ? 'Dashboard, Reports, and Audio uploads require an explicitly owned location.'
+                        : 'A workspace owner must add a location before Dashboard, Reports, and Audio uploads are available.',
                     textAlign: TextAlign.center,
                     style: TextStyle(color: scheme.onSurfaceVariant),
                   ),

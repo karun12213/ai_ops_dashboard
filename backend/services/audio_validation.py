@@ -22,9 +22,11 @@ _SUPPORTED_MEDIA_TYPES = {
     "m4a": ("audio/mp4", frozenset({"audio/mp4", "audio/m4a", "audio/x-m4a"})),
     "aac": ("audio/aac", frozenset({"audio/aac", "audio/x-aac"})),
     "ogg": ("audio/ogg", frozenset({"audio/ogg", "application/ogg"})),
+    "opus": ("audio/ogg", frozenset({"audio/ogg", "audio/opus", "application/ogg"})),
+    "mp4": ("audio/mp4", frozenset({"audio/mp4", "video/mp4", "application/mp4"})),
 }
 _GENERIC_MEDIA_TYPES = frozenset({"", "application/octet-stream"})
-_M4A_BRANDS = frozenset({b"M4A ", b"M4B ", b"isom", b"iso2", b"mp41", b"mp42", b"qt  "})
+_MP4_BRANDS = frozenset({b"M4A ", b"M4B ", b"isom", b"iso2", b"mp41", b"mp42", b"qt  "})
 
 
 def sanitize_filename(filename: str | None) -> str:
@@ -49,14 +51,19 @@ def validate_audio(
     detected = _detect_signature(prefix)
     if detected is None:
         raise UnsupportedAudioError("Unsupported or invalid audio file signature")
-    if detected.extension != requested_extension:
+    compatible_extensions = {
+        "ogg": frozenset({"ogg", "opus"}),
+        "mp4": frozenset({"m4a", "mp4"}),
+    }.get(detected.extension, frozenset({detected.extension}))
+    if requested_extension not in compatible_extensions:
         raise UnsupportedAudioError("Audio signature does not match the filename extension")
 
     normalized_media_type = (client_media_type or "").split(";", 1)[0].strip().lower()
-    accepted_media_types = _SUPPORTED_MEDIA_TYPES[detected.extension][1]
+    accepted_media_types = _SUPPORTED_MEDIA_TYPES[requested_extension][1]
     if normalized_media_type not in _GENERIC_MEDIA_TYPES | accepted_media_types:
         raise UnsupportedAudioError("Client media type conflicts with detected audio format")
-    return detected
+    canonical_media_type = _SUPPORTED_MEDIA_TYPES[requested_extension][0]
+    return DetectedAudio(extension=requested_extension, media_type=canonical_media_type)
 
 
 def _detect_signature(prefix: bytes) -> DetectedAudio | None:
@@ -64,8 +71,8 @@ def _detect_signature(prefix: bytes) -> DetectedAudio | None:
         return DetectedAudio(extension="wav", media_type="audio/wav")
     if len(prefix) >= 4 and prefix[:4] == b"OggS":
         return DetectedAudio(extension="ogg", media_type="audio/ogg")
-    if len(prefix) >= 12 and prefix[4:8] == b"ftyp" and prefix[8:12] in _M4A_BRANDS:
-        return DetectedAudio(extension="m4a", media_type="audio/mp4")
+    if len(prefix) >= 12 and prefix[4:8] == b"ftyp" and prefix[8:12] in _MP4_BRANDS:
+        return DetectedAudio(extension="mp4", media_type="audio/mp4")
     if len(prefix) >= 2 and prefix[0] == 0xFF and (prefix[1] & 0xF6) == 0xF0:
         return DetectedAudio(extension="aac", media_type="audio/aac")
     if prefix.startswith(b"ID3") or _looks_like_mpeg_layer_three(prefix):

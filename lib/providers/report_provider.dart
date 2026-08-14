@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../models/report_data.dart';
 import '../services/csv_export_saver.dart';
+import '../services/pdf_export_saver.dart';
 import '../services/report_service.dart';
 import 'auth_provider.dart';
 import 'workspace_provider.dart';
@@ -102,4 +103,8 @@ final reportProvider = FutureProvider.autoDispose<ReportData>((ref) {
 
 final csvExportSaverProvider = Provider<CsvExportSaver>((ref) {
   return const FilePickerCsvExportSaver();
+});
+
+final pdfExportSaverProvider = Provider<PdfExportSaver>((ref) {
+  return const FilePickerPdfExportSaver();
 });

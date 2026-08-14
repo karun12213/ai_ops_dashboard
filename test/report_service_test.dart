@@ -70,6 +70,36 @@ void main() {
                 'revenue_growth_percent': 12.8,
               },
             ],
+            'audio_reports': [
+              {
+                'id': 'report-1',
+                'upload_id': 'upload-1',
+                'workspace_id': 'workspace-1',
+                'location_id': locationId,
+                'location_name': 'Bandra',
+                'audio_duration_seconds': 2.0,
+                'sarvam_model': 'saaras:v3',
+                'sarvam_estimated_cost_inr': '0.01666667',
+                'openai_model': 'gpt-4o-2024-11-20',
+                'openai_input_tokens': 150,
+                'openai_cached_input_tokens': 20,
+                'openai_output_tokens': 15,
+                'openai_total_tokens': 165,
+                'openai_estimated_cost_usd': '0.00050000',
+                'total_estimated_cost': {
+                  'INR': '0.01666667',
+                  'USD': '0.00050000',
+                },
+                'transcript': 'The dinner station is low on plates.',
+                'summary': 'Restock the dinner station',
+                'category': 'inventory',
+                'severity': 'high',
+                'requires_attention': true,
+                'recommended_action': 'Move clean plates to the station.',
+                'source': 'AI Audio Monitor',
+                'processed_at': '2026-08-03T10:00:02Z',
+              },
+            ],
           }),
           200,
           headers: {'content-type': 'application/json'},
@@ -94,6 +124,13 @@ void main() {
     ]);
     expect(report.revenueTrend.last.revenueMinor, 7200);
     expect(report.locationPerformance.single.revenueGrowthPercent, 12.8);
+    expect(report.audioReports.single.locationName, 'Bandra');
+    expect(report.audioReports.single.requiresAttention, isTrue);
+    expect(report.audioReports.single.apiCost.sarvamModel, 'saaras:v3');
+    expect(report.audioReports.single.apiCost.openaiInputTokens, 150);
+    expect(report.audioReports.single.apiCost.openaiTotalTokens, 165);
+    expect(report.audioReports.single.apiCost.totalInr, 0.01666667);
+    expect(report.audioReports.single.apiCost.totalUsd, 0.0005);
     expect(report.hasData, isTrue);
   });
 
@@ -116,6 +153,7 @@ void main() {
             'channel_split': [],
             'revenue_trend': [],
             'location_performance': [],
+            'audio_reports': [],
           }),
           200,
         ),
@@ -177,6 +215,37 @@ void main() {
       expect(export.bytes, isA<Uint8List>());
     },
   );
+
+  test('downloads an authenticated AI audio report PDF', () async {
+    final apiClient = ApiClient(
+      tokenStorage: _MemoryTokenStorage(accessToken: 'reports-access-token'),
+      client: MockClient((request) async {
+        expect(request.method, 'GET');
+        expect(
+          request.url,
+          Uri.parse('http://localhost:8000/api/v1/reports/report-123/pdf'),
+        );
+        expect(request.headers['authorization'], 'Bearer reports-access-token');
+        expect(request.headers['accept'], 'application/pdf');
+        return http.Response.bytes(
+          Uint8List.fromList([0x25, 0x50, 0x44, 0x46]),
+          200,
+          headers: {
+            'content-type': 'application/pdf',
+            'content-disposition':
+                'attachment; filename="../unsafe audio report.pdf"',
+          },
+        );
+      }),
+    );
+
+    final export = await ReportService(
+      apiClient,
+    ).exportAudioPdf(reportId: 'report-123');
+
+    expect(export.bytes, [0x25, 0x50, 0x44, 0x46]);
+    expect(export.filename, '.._unsafe_audio_report.pdf');
+  });
 }
 
 class _MemoryTokenStorage extends TokenStorage {

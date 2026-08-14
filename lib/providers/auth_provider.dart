@@ -31,8 +31,16 @@ class AuthState {
 
 final tokenStorageProvider = Provider<TokenStorage>((ref) => TokenStorage());
 
+final sessionExpirySignalProvider = StateProvider<int>((ref) => 0);
+
 final apiClientProvider = Provider<ApiClient>((ref) {
-  return ApiClient(tokenStorage: ref.watch(tokenStorageProvider));
+  return ApiClient(
+    tokenStorage: ref.watch(tokenStorageProvider),
+    onSessionExpired: () {
+      final notifier = ref.read(sessionExpirySignalProvider.notifier);
+      notifier.state = notifier.state + 1;
+    },
+  );
 });
 
 final authServiceProvider = Provider<AuthService>((ref) {
@@ -47,10 +55,14 @@ final developmentLoginConfigProvider = Provider<DevelopmentLoginConfig>((ref) {
 });
 
 final authProvider = StateNotifierProvider<AuthNotifier, AuthState>((ref) {
-  return AuthNotifier(
+  final notifier = AuthNotifier(
     ref.watch(authServiceProvider),
     ref.watch(developmentLoginConfigProvider),
   );
+  ref.listen<int>(sessionExpirySignalProvider, (previous, next) {
+    if (previous != null && next > previous) notifier.sessionExpired();
+  });
+  return notifier;
 });
 
 class AuthNotifier extends StateNotifier<AuthState> {
@@ -158,6 +170,14 @@ class AuthNotifier extends StateNotifier<AuthState> {
       status: state.status,
       user: state.user,
       sessionType: state.sessionType,
+    );
+  }
+
+  void sessionExpired() {
+    if (!mounted) return;
+    state = const AuthState(
+      status: AuthStatus.unauthenticated,
+      errorMessage: 'Your session has expired. Please sign in again.',
     );
   }
 

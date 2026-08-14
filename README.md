@@ -1,11 +1,14 @@
 # Restaurant Ops
 
-A production-oriented foundation for a restaurant operations platform. The repository contains a responsive Flutter Web client and a FastAPI/PostgreSQL API with JWT authentication. Task 1 intentionally contains no AI models, transcription, analysis, or third-party AI integrations.
+A restaurant operations platform with a responsive Flutter client and a
+FastAPI database API. Authenticated recordings are translated to English by
+Sarvam, analyzed into structured operational reports by OpenAI, and surfaced
+in both the Dashboard activity feed and Reports.
 
 ## What is included
 
 - Flutter Web with Material 3, Riverpod, GoRouter, responsive drawer/navigation rail, dark theme, and authenticated route guards
-- Login, workspace-aware dashboard and reports, authenticated audio uploads, and settings screens
+- Login, workspace-aware dashboard and reports, authenticated AI audio processing, and settings screens
 - FastAPI with async PostgreSQL access, user registration, login, token refresh, current-user, liveness, and database-readiness APIs
 - Argon2 password hashing and short-lived access plus refresh JWTs
 - Docker images, Docker Compose, Nginx SPA/proxy configuration, environment template, and Railway config-as-code
@@ -77,6 +80,26 @@ Use either account's email and password on the login screen.
 
 ## Run locally without Docker
 
+On Windows, after `.venv` and `.env` have been created, the normal one-command
+launcher applies Alembic migrations, starts the API, and opens Flutter in
+Chrome:
+
+```powershell
+.\start_dev.ps1
+```
+
+Use `.\start_dev.ps1 -WebServer` when a browser should be opened manually.
+The launcher runs a non-billable preflight first, verifies the database,
+migration head, private audio storage, provider-key presence, and FFmpeg, and
+refuses to take over a port owned by another project. Use `-BackendPort 8010`
+only when a different port is intentionally needed; Flutter receives the same
+URL automatically. Add `-CheckProviderDns` for DNS-only provider diagnostics.
+
+FFmpeg and FFprobe must be available on `PATH` (or configured with
+`FFMPEG_BINARY` and `FFPROBE_BINARY`). On Windows they can be installed with
+`winget install --id Gyan.FFmpeg --exact`. The backend Docker image installs
+FFmpeg automatically.
+
 ### API
 
 Use Python 3.12+. Local development uses an automatically created SQLite
@@ -85,7 +108,7 @@ database, so PostgreSQL and Docker are not required.
 ```bash
 python -m venv .venv
 source .venv/bin/activate              # Windows: .venv\Scripts\activate
-pip install -r backend/requirements.txt
+pip install -r backend/requirements-dev.txt
 uvicorn backend.main:app --reload --port 8000
 ```
 
@@ -142,10 +165,13 @@ flutter build web --release --dart-define=API_BASE_URL=https://api.example.com/a
 | `GET` | `/api/v1/dashboard?workspace_id=...&location_id=...&service_date=YYYY-MM-DD` | Return the authorized location's daily Dashboard snapshot and recent activity |
 | `GET` | `/api/v1/reports?workspace_id=...&start_date=...&end_date=...` | Return an authorized workspace report, optionally filtered by location |
 | `GET` | `/api/v1/reports/export.csv?workspace_id=...&start_date=...&end_date=...` | Export authorized workspace report rows as CSV |
-| `POST` | `/api/v1/audio-uploads` | Validate and store authenticated multipart audio |
-| `GET` | `/api/v1/audio-uploads?limit=50` | List the authenticated operator's upload history |
-| `GET` | `/api/v1/audio-uploads/{id}/download` | Download an owned, ready audio object |
-| `DELETE` | `/api/v1/audio-uploads/{id}` | Delete owned audio metadata and content |
+| `GET` | `/api/v1/reports/{report_id}/pdf` | Download a tenant-authorized A4 AI audio report PDF |
+| `POST` | `/api/v1/audio-uploads` | Validate/store authenticated multipart audio, run AI processing, and create a location-scoped Dashboard activity |
+| `GET` | `/api/v1/audio-uploads?workspace_id=...&location_id=...&limit=50` | List the authenticated operator's upload history for an authorized location |
+| `POST` | `/api/v1/audio-uploads/{id}/retry?workspace_id=...&location_id=...` | Resume failed AI processing from the stored audio or persisted English transcript |
+| `GET` | `/api/v1/audio-uploads/{id}/audio?workspace_id=...&location_id=...` | Stream authenticated, browser-playable audio without exposing its storage key |
+| `GET` | `/api/v1/audio-uploads/{id}/download?workspace_id=...&location_id=...` | Download an owned, ready audio object in the active tenant context |
+| `DELETE` | `/api/v1/audio-uploads/{id}?workspace_id=...&location_id=...` | Delete owned audio content and its generated report/activity |
 
 Dashboard responses are sourced from the date-scoped
 `dashboard_daily_snapshots`, `dashboard_hourly_sales`, and
@@ -163,12 +189,28 @@ snapshots, and activities unowned. These legacy rows are not visible through
 tenant-scoped APIs until an operator performs an explicit, reviewed ownership
 backfill; the migration never guesses ownership.
 
-Audio uploads support MP3, WAV, M4A, AAC, and OGG files up to 100 MiB. The API
-streams the file through a byte-signature validator and stores it under a
-server-generated private key. `AUDIO_LOCAL_STORAGE_PATH` must point to durable,
-non-public storage. The included Compose configuration mounts a named volume;
-multi-replica production deployments should replace the local storage adapter
-with shared S3-compatible object storage and configure a real malware scanner.
+Audio uploads support valid MP3, WAV, M4A, AAC, OGG/Opus (including normal
+WhatsApp PTT), and MP4 audio files up to 100 MiB and two hours. The API streams
+the upload to private storage, verifies its real container/codec with FFprobe,
+and normalizes a temporary provider copy to 16 kHz mono PCM WAV with FFmpeg;
+the original remains available for playback. Recordings up to 30 seconds use
+Sarvam's synchronous `saaras:v3` translate path. Longer recordings use the
+asynchronous batch path with a persisted job ID, bounded polling, and
+restart-safe resume. `unknown` enables Sarvam language auto-detection and every
+successful provider output used for analysis is English.
+
+After translation, OpenAI structured output is validated and one persisted
+operations report plus one `AI Audio Monitor` Dashboard activity are committed
+atomically. A failed Sarvam upload remains retryable; a persisted transcript is
+reused if only OpenAI failed. Completed duplicate audio returns the existing
+upload/report IDs without another provider call. Reports include the full
+English transcript and can be downloaded as tenant-authorized, paginated A4
+PDFs. Configure
+`SARVAM_API_KEY` and `OPENAI_API_KEY` only through environment secrets.
+`AUDIO_LOCAL_STORAGE_PATH` must point to durable, non-public storage. The
+included Compose configuration mounts a named volume; multi-replica production
+deployments should replace the local storage adapter with shared S3-compatible
+object storage and configure a real malware scanner.
 
 ## Production configuration
 
@@ -182,7 +224,10 @@ reuse revokes the user's other active refresh sessions. For a hardened public
 deployment, prefer a same-origin backend-for-frontend using Secure, HttpOnly,
 SameSite cookies so browser scripts cannot read session credentials.
 
-## Audio module boundary
+## Audio processing boundary
 
-The audio module stores and retrieves validated files only. It does not
-transcribe, summarize, analyze, or call an AI service.
+The audio route authorizes the selected location before storage and returns a
+completed processing result containing the English transcript, structured
+analysis, report ID, activity ID, location, source, and processing time.
+External AI failures return a controlled error, leave retryable upload
+metadata, and do not create a partial report or Dashboard activity.

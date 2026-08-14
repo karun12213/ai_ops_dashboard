@@ -104,6 +104,14 @@ class WorkspaceNotifier extends StateNotifier<WorkspaceState> {
         isLoading: false,
         loadError: null,
       );
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      state = state.copyWith(
+        isLoading: false,
+        loadError: error.statusCode == 401
+            ? 'Your session has expired. Please sign in again.'
+            : 'Workspace access could not be loaded.',
+      );
     } catch (_) {
       if (!mounted) return;
       state = state.copyWith(

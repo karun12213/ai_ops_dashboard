@@ -1,12 +1,13 @@
 import csv
 import io
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.api.schemas.report import (
+    AudioOperationsReportResponse,
     ReportChannelResponse,
     ReportLocationPerformanceResponse,
     ReportLocationResponse,
@@ -14,7 +15,10 @@ from backend.api.schemas.report import (
     ReportTotalsResponse,
     ReportTrendPointResponse,
 )
-from backend.models.report import ReportDailySales, ReportLocation
+from backend.models.audio_upload import AudioUpload
+from backend.models.report import AudioOperationsReport, ReportDailySales, ReportLocation
+from backend.models.workspace import Workspace
+from backend.services.report_pdf_service import AudioReportPdfData
 
 CSV_MAX_ROWS = 10_000
 
@@ -43,6 +47,43 @@ class ReportService:
 
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
+
+    async def get_audio_pdf_data(
+        self,
+        *,
+        report_id: uuid.UUID,
+    ) -> AudioReportPdfData | None:
+        row = (
+            await self._session.execute(
+                select(AudioOperationsReport, AudioUpload, ReportLocation, Workspace)
+                .join(AudioUpload, AudioUpload.id == AudioOperationsReport.upload_id)
+                .join(ReportLocation, ReportLocation.id == AudioOperationsReport.location_id)
+                .join(Workspace, Workspace.id == AudioOperationsReport.workspace_id)
+                .where(AudioOperationsReport.id == report_id)
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        report, upload, location, workspace = row
+        return AudioReportPdfData(
+            report_id=report.id,
+            upload_id=report.upload_id,
+            workspace_id=report.workspace_id,
+            location_id=report.location_id,
+            original_filename=upload.original_filename,
+            workspace_name=workspace.name,
+            location_name=location.name,
+            source_language=upload.language_code or "unknown",
+            detected_language=upload.detected_language_code,
+            processed_at=report.processed_at,
+            transcript=report.transcript,
+            summary=report.summary,
+            category=report.category,
+            severity=report.severity,
+            requires_attention=report.requires_attention,
+            recommended_action=report.recommended_action,
+            source=report.source,
+        )
 
     async def get(
         self,
@@ -157,6 +198,33 @@ class ReportService:
             row.location_id: int(row[1]) for row in previous_rows
         }
 
+        audio_filters = [
+            AudioOperationsReport.workspace_id == workspace_id,
+            AudioOperationsReport.processed_at
+            >= datetime.combine(start_date, time.min, tzinfo=timezone.utc),
+            AudioOperationsReport.processed_at
+            < datetime.combine(
+                end_date + timedelta(days=1), time.min, tzinfo=timezone.utc
+            ),
+        ]
+        if location_id is not None:
+            audio_filters.append(AudioOperationsReport.location_id == location_id)
+        audio_rows = (
+            await self._session.execute(
+                select(AudioOperationsReport, ReportLocation.name, AudioUpload)
+                .join(
+                    ReportLocation,
+                    ReportLocation.id == AudioOperationsReport.location_id,
+                )
+                .join(AudioUpload, AudioUpload.id == AudioOperationsReport.upload_id)
+                .where(*audio_filters)
+                .order_by(
+                    AudioOperationsReport.processed_at.desc(),
+                    AudioOperationsReport.id.desc(),
+                )
+            )
+        ).all()
+
         return ReportResponse(
             start_date=start_date,
             end_date=end_date,
@@ -207,6 +275,38 @@ class ReportService:
                     ),
                 )
                 for row in location_rows
+            ],
+            audio_reports=[
+                AudioOperationsReportResponse(
+                    id=audio_report.id,
+                    upload_id=audio_report.upload_id,
+                    workspace_id=audio_report.workspace_id,
+                    location_id=audio_report.location_id,
+                    location_name=location_name,
+                    transcript=audio_report.transcript,
+                    summary=audio_report.summary,
+                    category=audio_report.category,
+                    severity=audio_report.severity,
+                    requires_attention=audio_report.requires_attention,
+                    recommended_action=audio_report.recommended_action,
+                    source=audio_report.source,
+                    processed_at=audio_report.processed_at,
+                    original_filename=upload.original_filename,
+                    media_type=upload.media_type,
+                    source_language=upload.language_code,
+                    detected_language=upload.detected_language_code,
+                    audio_duration_seconds=upload.audio_duration_seconds,
+                    sarvam_model=upload.sarvam_model,
+                    sarvam_estimated_cost_inr=upload.sarvam_estimated_cost_inr,
+                    openai_model=upload.openai_model,
+                    openai_input_tokens=upload.openai_input_tokens,
+                    openai_cached_input_tokens=upload.openai_cached_input_tokens,
+                    openai_output_tokens=upload.openai_output_tokens,
+                    openai_total_tokens=upload.openai_total_tokens,
+                    openai_estimated_cost_usd=upload.openai_estimated_cost_usd,
+                    total_estimated_cost=upload.total_estimated_cost,
+                )
+                for audio_report, location_name, upload in audio_rows
             ],
         )
 

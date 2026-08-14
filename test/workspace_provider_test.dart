@@ -188,6 +188,31 @@ void main() {
     expect(notifier.state.submissionError, 'Workspace could not be created');
     expect(notifier.state.isSubmitting, isFalse);
   });
+
+  test(
+    'identifies an unauthorized workspace context without leaking detail',
+    () async {
+      final notifier = WorkspaceNotifier(
+        _FakeWorkspaceRepository(
+          contextError: const ApiException(
+            'unsafe authentication detail',
+            statusCode: 401,
+          ),
+        ),
+        loadOnCreate: false,
+        initialState: const WorkspaceState(isLoading: false),
+      );
+      addTearDown(notifier.dispose);
+
+      await notifier.load();
+
+      expect(
+        notifier.state.loadError,
+        'Your session has expired. Please sign in again.',
+      );
+      expect(notifier.state.loadError, isNot(contains('unsafe')));
+    },
+  );
 }
 
 const _context = WorkspaceContext(workspaces: [_workspaceOne, _workspaceTwo]);

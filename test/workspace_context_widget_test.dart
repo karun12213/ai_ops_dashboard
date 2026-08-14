@@ -69,7 +69,7 @@ void main() {
     expect(find.text('Add your first location'), findsOneWidget);
     expect(
       find.text(
-        'A workspace owner must add a location before Dashboard and Reports are available.',
+        'A workspace owner must add a location before Dashboard, Reports, and Audio uploads are available.',
       ),
       findsOneWidget,
     );
@@ -222,6 +222,7 @@ class _RecordingDashboardService implements DashboardService {
     required DateTime serviceDate,
     required String workspaceId,
     required String locationId,
+    int activityLimit = 10,
   }) async {
     workspaceIds.add(workspaceId);
     locationIds.add(locationId);

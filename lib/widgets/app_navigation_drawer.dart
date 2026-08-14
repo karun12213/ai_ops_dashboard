@@ -12,6 +12,11 @@ class AppNavigationDrawer extends StatelessWidget {
     _Destination('Dashboard', Icons.grid_view_rounded, AppRoutes.dashboard),
     _Destination('Reports', Icons.analytics_outlined, AppRoutes.reports),
     _Destination(
+      'Cost Analytics',
+      Icons.paid_outlined,
+      AppRoutes.costAnalytics,
+    ),
+    _Destination(
       'Audio upload',
       Icons.graphic_eq_rounded,
       AppRoutes.audioUpload,

@@ -1,16 +1,20 @@
 import uuid
-from datetime import date
+from datetime import date, datetime
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     Date,
+    DateTime,
     ForeignKey,
     Index,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     Uuid,
+    func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -92,3 +96,67 @@ class ReportDailySales(Base):
     channel: Mapped[str] = mapped_column(String(24), nullable=False)
     net_sales_minor: Mapped[int] = mapped_column(BigInteger, nullable=False)
     order_count: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class AudioOperationsReport(Base):
+    """A tenant-scoped operational report generated from one audio upload."""
+
+    __tablename__ = "audio_operations_reports"
+    __table_args__ = (
+        CheckConstraint(
+            "category IN ('operations', 'staff', 'inventory', 'customer', 'safety', 'other')",
+            name="ck_audio_operations_reports_category",
+        ),
+        CheckConstraint(
+            "severity IN ('low', 'medium', 'high', 'critical')",
+            name="ck_audio_operations_reports_severity",
+        ),
+        Index(
+            "ix_audio_operations_reports_workspace_processed",
+            "workspace_id",
+            "processed_at",
+        ),
+        Index(
+            "ix_audio_operations_reports_location_processed",
+            "location_id",
+            "processed_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    upload_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("audio_uploads.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    location_id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("report_locations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    transcript: Mapped[str] = mapped_column(Text, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    category: Mapped[str] = mapped_column(String(40), nullable=False)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)
+    requires_attention: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    recommended_action: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="AI Audio Monitor"
+    )
+    processed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

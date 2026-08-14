@@ -1,40 +1,62 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 
 import '../utils/app_constants.dart';
 import 'token_storage.dart';
 
 class ApiException implements Exception {
-  const ApiException(this.message, {this.statusCode});
+  const ApiException(
+    this.message, {
+    this.statusCode,
+    this.code,
+    this.existingUploadId,
+    this.existingReportId,
+  });
 
   final String message;
   final int? statusCode;
+  final String? code;
+  final String? existingUploadId;
+  final String? existingReportId;
 
   @override
   String toString() => message;
 }
 
 class ApiDownloadResponse {
-  const ApiDownloadResponse({required this.bytes, required this.filename});
+  const ApiDownloadResponse({
+    required this.bytes,
+    required this.filename,
+    required this.contentType,
+  });
 
   final Uint8List bytes;
   final String? filename;
+  final String? contentType;
 }
 
 class ApiClient {
-  ApiClient({http.Client? client, TokenStorage? tokenStorage})
-    : _client = client ?? http.Client(),
-      _tokenStorage = tokenStorage ?? TokenStorage();
+  ApiClient({
+    http.Client? client,
+    TokenStorage? tokenStorage,
+    this.onSessionExpired,
+  }) : _client = client ?? http.Client(),
+       _tokenStorage = tokenStorage ?? TokenStorage();
 
   final http.Client _client;
   final TokenStorage _tokenStorage;
+  final FutureOr<void> Function()? onSessionExpired;
   Future<bool>? _refreshInFlight;
 
   static const _requestTimeout = Duration(seconds: 15);
-  static const _uploadTimeout = Duration(minutes: 5);
+  // Sarvam batch jobs can legitimately outlive a short HTTP request. The
+  // backend persists the provider job ID, so a browser retry can resume after
+  // a disconnect without paying for another transcription.
+  static const _uploadTimeout = Duration(minutes: 35);
 
   Uri _uri(String path) => AppConstants.apiUri(path);
 
@@ -83,6 +105,8 @@ class ApiClient {
     required String filename,
     required int length,
     required Stream<List<int>> Function() openRead,
+    required String mediaType,
+    Map<String, String> fields = const {},
     void Function(double progress)? onProgress,
     bool authenticated = true,
   }) async {
@@ -97,17 +121,34 @@ class ApiClient {
             headers: headers,
             fieldName: fieldName,
             filename: filename,
+            mediaType: mediaType,
             length: length,
             stream: openRead(),
+            fields: fields,
             onProgress: onProgress,
           );
         },
       );
       return _decode(response);
+    } on ApiException {
+      rethrow;
     } on TimeoutException {
       throw const ApiException('The upload did not complete in time.');
     } on http.ClientException {
-      throw const ApiException('Unable to reach the API.');
+      throw const ApiException(
+        'Cannot reach the server. Check that the backend is running.',
+        code: 'network_unreachable',
+      );
+    } catch (error, stackTrace) {
+      if (kDebugMode) {
+        debugPrint(
+          'Audio multipart runtime failure: ${error.runtimeType}: $error\n$stackTrace',
+        );
+      }
+      throw const ApiException(
+        'The recording could not be processed.',
+        code: 'multipart_runtime_failure',
+      );
     }
   }
 
@@ -128,14 +169,13 @@ class ApiClient {
   Future<ApiDownloadResponse> download(
     String path, {
     bool authenticated = true,
+    String accept = 'application/octet-stream',
   }) async {
     try {
       final response = await _sendWithAuthRetry(
         authenticated: authenticated,
-        send: (headers) => _client.get(
-          _uri(path),
-          headers: {...headers, 'Accept': 'text/csv'},
-        ),
+        send: (headers) =>
+            _client.get(_uri(path), headers: {...headers, 'Accept': accept}),
       );
       if (response.statusCode < 200 || response.statusCode >= 300) {
         _decode(response);
@@ -147,6 +187,7 @@ class ApiClient {
       return ApiDownloadResponse(
         bytes: response.bodyBytes,
         filename: _responseFilename(response.headers['content-disposition']),
+        contentType: response.headers['content-type'],
       );
     } on TimeoutException {
       throw const ApiException('The API did not respond in time.');
@@ -185,8 +226,10 @@ class ApiClient {
     required Map<String, String> headers,
     required String fieldName,
     required String filename,
+    required String mediaType,
     required int length,
     required Stream<List<int>> stream,
+    required Map<String, String> fields,
     void Function(double progress)? onProgress,
   }) async {
     if (length <= 0) throw const ApiException('The selected file is empty.');
@@ -201,17 +244,32 @@ class ApiClient {
       ),
     );
     final request = http.MultipartRequest('POST', _uri(path));
-    request.headers.addAll(headers..remove('Content-Type'));
+    final multipartHeaders = {...headers}..remove('Content-Type');
+    request.headers.addAll(multipartHeaders);
+    request.fields.addAll(fields);
     request.files.add(
       http.MultipartFile(
         fieldName,
         http.ByteStream(progressStream),
         length,
         filename: filename,
+        contentType: MediaType.parse(mediaType),
       ),
     );
+    if (kDebugMode) {
+      debugPrint(
+        'Audio multipart request: POST ${_uri(path)}; '
+        'auth=${request.headers.containsKey('Authorization')}; '
+        'fields=${fields.keys.join(',')}; filename=$filename; '
+        'mime=$mediaType; bytes=$length',
+      );
+    }
     final streamedResponse = await _client.send(request);
-    return http.Response.fromStream(streamedResponse);
+    final response = await http.Response.fromStream(streamedResponse);
+    if (kDebugMode) {
+      debugPrint('Audio multipart response: status=${response.statusCode}');
+    }
+    return response;
   }
 
   /// Rotates the saved refresh token, coalescing simultaneous refreshes.
@@ -233,6 +291,7 @@ class ApiClient {
     final refreshToken = await _tokenStorage.getRefreshToken();
     if (refreshToken == null || refreshToken.isEmpty) {
       await _tokenStorage.clear();
+      await _notifySessionExpired();
       return false;
     }
 
@@ -266,7 +325,16 @@ class ApiClient {
       return true;
     } catch (_) {
       await _tokenStorage.clear();
+      await _notifySessionExpired();
       return false;
+    }
+  }
+
+  Future<void> _notifySessionExpired() async {
+    try {
+      await onSessionExpired?.call();
+    } catch (_) {
+      // Authentication state notification must never mask the HTTP result.
     }
   }
 
@@ -300,12 +368,38 @@ class ApiClient {
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
       final detail = payload['detail'];
-      final message = detail is String
-          ? detail
-          : 'The request could not be completed.';
-      throw ApiException(message, statusCode: response.statusCode);
+      final structured = detail is Map<String, dynamic> ? detail : null;
+      final message = _errorMessage(
+        response.statusCode,
+        structured?['message'] ?? detail,
+      );
+      throw ApiException(
+        message,
+        statusCode: response.statusCode,
+        code: structured?['code'] as String?,
+        existingUploadId: structured?['existing_upload_id'] as String?,
+        existingReportId: structured?['existing_report_id'] as String?,
+      );
     }
     return payload;
+  }
+
+  static String _errorMessage(int statusCode, Object? detail) {
+    if (statusCode >= 500) {
+      return statusCode == 503
+          ? 'A required service is temporarily unavailable. Please try again.'
+          : 'The server could not complete the request. Please try again.';
+    }
+    if (detail is String && detail.isNotEmpty) return detail;
+    return switch (statusCode) {
+      401 => 'Your session has expired. Please sign in again.',
+      404 => 'The requested resource was not found.',
+      409 => 'This request conflicts with an existing record.',
+      413 => 'The selected file is too large.',
+      415 => 'The selected audio format is not supported.',
+      422 => 'Some submitted information is invalid.',
+      _ => 'The request could not be completed.',
+    };
   }
 
   static String? _responseFilename(String? contentDisposition) {

@@ -117,9 +117,18 @@ class DashboardActivity(Base):
             "location_id",
             "service_date",
         ),
+        UniqueConstraint(
+            "audio_upload_id",
+            name="uq_dashboard_activities_audio_upload_id",
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    audio_upload_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("audio_uploads.id", ondelete="CASCADE"),
+        nullable=True,
+    )
     location_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("report_locations.id", ondelete="CASCADE"),
@@ -130,3 +139,4 @@ class DashboardActivity(Base):
     title: Mapped[str] = mapped_column(String(160), nullable=False)
     actor: Mapped[str] = mapped_column(String(120), nullable=False)
     category: Mapped[str] = mapped_column(String(40), nullable=False, default="operations")
+    severity: Mapped[str | None] = mapped_column(String(16), nullable=True)

@@ -1,4 +1,5 @@
 import secrets
+from decimal import Decimal
 from functools import lru_cache
 from typing import List, Optional
 
@@ -36,13 +37,47 @@ class Settings(BaseSettings):
     docs_enabled: Optional[bool] = None
     api_v1_prefix: str = "/api/v1"
 
-    # Keep local development self-contained. Docker and production override this
-    # with PostgreSQL through DATABASE_URL.
+    # Keep local development self-contained. Deployments override this through
+    # DATABASE_URL with their managed database connection.
     database_url: str = "sqlite+aiosqlite:///./backend/restaurant_ops.db"
     auto_create_tables: Optional[bool] = None
 
+    sarvam_api_key: Optional[SecretStr] = None
+    sarvam_model: str = "saaras:v3"
+    sarvam_mode: str = "translate"
+    sarvam_timeout_seconds: float = Field(default=90.0, gt=0, le=600)
+    sarvam_max_retries: int = Field(default=2, ge=0, le=5)
+    sarvam_retry_backoff_seconds: float = Field(default=1.0, ge=0, le=30)
+    sarvam_short_audio_max_seconds: float = Field(default=30.0, gt=0, le=30)
+    sarvam_batch_timeout_seconds: int = Field(default=1800, ge=60, le=7200)
+    sarvam_batch_poll_seconds: int = Field(default=5, ge=3, le=60)
+    sarvam_cost_per_audio_hour_inr: Decimal = Field(
+        default=Decimal("30.00"),
+        ge=0,
+    )
+    openai_api_key: Optional[SecretStr] = None
+    openai_model: str = "gpt-4o"
+    openai_timeout_seconds: float = Field(default=90.0, gt=0, le=600)
+    openai_max_retries: int = Field(default=2, ge=0, le=5)
+    openai_transcript_chunk_chars: int = Field(default=24000, ge=4000, le=100000)
+    openai_input_cost_per_million_usd: Decimal = Field(
+        default=Decimal("2.50"),
+        ge=0,
+    )
+    openai_cached_input_cost_per_million_usd: Decimal = Field(
+        default=Decimal("1.25"),
+        ge=0,
+    )
+    openai_output_cost_per_million_usd: Decimal = Field(
+        default=Decimal("10.00"),
+        ge=0,
+    )
+
     audio_local_storage_path: str = "./backend/audio_uploads"
     audio_max_upload_bytes: int = Field(default=100 * 1024 * 1024, ge=1, le=100 * 1024 * 1024)
+    audio_max_duration_seconds: float = Field(default=7200.0, gt=0, le=7200)
+    ffmpeg_binary: Optional[str] = None
+    ffprobe_binary: Optional[str] = None
 
     # Development bootstrap account. Its values must come from the environment;
     # production always ignores the seed flag, even if it is set accidentally.
@@ -97,7 +132,9 @@ class Settings(BaseSettings):
                 "documented development or placeholder secret in production."
             )
         if self.database_url.strip().lower().startswith("sqlite"):
-            raise ValueError("DATABASE_URL must use PostgreSQL rather than SQLite in production.")
+            raise ValueError(
+                "DATABASE_URL must use a production database rather than SQLite in production."
+            )
         if self.auto_create_tables is True:
             raise ValueError(
                 "AUTO_CREATE_TABLES=true is forbidden in production; apply Alembic "

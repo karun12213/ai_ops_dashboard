@@ -101,6 +101,28 @@ void main() {
     expect(notifier.state.sessionType, isNull);
     expect(notifier.state.errorMessage, 'Authentication service unavailable');
   });
+
+  test(
+    'session expiry clears authenticated state with the required message',
+    () async {
+      final authService = _FakeAuthService(onLogin: (_) async => _backendUser);
+      final notifier = AuthNotifier(authService, developmentConfig);
+      addTearDown(notifier.dispose);
+      await notifier.login(
+        email: 'operator@example.test',
+        password: 'password',
+      );
+
+      notifier.sessionExpired();
+
+      expect(notifier.state.status, AuthStatus.unauthenticated);
+      expect(notifier.state.user, isNull);
+      expect(
+        notifier.state.errorMessage,
+        'Your session has expired. Please sign in again.',
+      );
+    },
+  );
 }
 
 const _backendUser = User(

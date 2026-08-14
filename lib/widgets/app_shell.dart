@@ -22,7 +22,10 @@ class AppShell extends ConsumerWidget {
     final user = ref.watch(authProvider).user;
     final workspaceState = ref.watch(workspaceProvider);
     final requiresWorkspace =
-        location == AppRoutes.dashboard || location == AppRoutes.reports;
+        location == AppRoutes.dashboard ||
+        location == AppRoutes.reports ||
+        location == AppRoutes.costAnalytics ||
+        location == AppRoutes.audioUpload;
 
     return Scaffold(
       drawer: wide ? null : AppNavigationDrawer(currentLocation: location),
@@ -85,12 +88,15 @@ class AppShell extends ConsumerWidget {
         ),
       );
     }
-    if (state.loadError != null) return const _WorkspaceLoadError();
+    if (state.loadError != null) {
+      return _WorkspaceLoadError(message: state.loadError!);
+    }
     return const WorkspaceSetupScreen();
   }
 
   static String _title(String location) => switch (location) {
     AppRoutes.reports => 'Reports',
+    AppRoutes.costAnalytics => 'Cost Analytics',
     AppRoutes.audioUpload => 'Audio upload',
     AppRoutes.settings => 'Settings',
     _ => 'Dashboard',
@@ -196,10 +202,13 @@ class _WorkspaceLocationSelector extends ConsumerWidget {
 }
 
 class _WorkspaceLoadError extends ConsumerWidget {
-  const _WorkspaceLoadError();
+  const _WorkspaceLoadError({required this.message});
+
+  final String message;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final unauthorized = message.startsWith('Your session has expired');
     return Center(
       child: Padding(
         padding: const EdgeInsets.all(24),
@@ -213,19 +222,25 @@ class _WorkspaceLoadError extends ConsumerWidget {
             ),
             const SizedBox(height: 14),
             Text(
-              'Workspace access is unavailable',
+              unauthorized
+                  ? 'Session expired'
+                  : 'Workspace access is unavailable',
               style: Theme.of(
                 context,
               ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
             ),
             const SizedBox(height: 6),
-            const Text('Check your connection and try again.'),
+            Text(message),
             const SizedBox(height: 16),
             FilledButton.icon(
               key: const Key('workspace-load-retry-button'),
-              onPressed: ref.read(workspaceProvider.notifier).load,
-              icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Try again'),
+              onPressed: unauthorized
+                  ? ref.read(authProvider.notifier).logout
+                  : ref.read(workspaceProvider.notifier).load,
+              icon: Icon(
+                unauthorized ? Icons.login_rounded : Icons.refresh_rounded,
+              ),
+              label: Text(unauthorized ? 'Sign in again' : 'Try again'),
             ),
           ],
         ),

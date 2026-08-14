@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest==8.3.5
+pytest-asyncio==0.26.0
+pdfplumber==0.11.7
+pypdf==6.0.0

@@ -52,6 +52,7 @@ class FreshDatabaseTests(unittest.TestCase):
         assert "report_locations" in tables
         assert "report_daily_sales" in tables
         assert "audio_uploads" in tables
+        assert "audio_operations_reports" in tables
         assert "workspaces" in tables
         assert "workspace_memberships" in tables
 
@@ -74,6 +75,9 @@ class FreshDatabaseTests(unittest.TestCase):
                 for index in inspector.get_indexes("report_daily_sales")
             }
             audio_foreign_keys = inspector.get_foreign_keys("audio_uploads")
+            audio_columns = {
+                column["name"] for column in inspector.get_columns("audio_uploads")
+            }
             audio_indexes = {
                 tuple(index["column_names"])
                 for index in inspector.get_indexes("audio_uploads")
@@ -104,6 +108,7 @@ class FreshDatabaseTests(unittest.TestCase):
             {
                 "alembic_version",
                 "audio_uploads",
+                "audio_operations_reports",
                 "dashboard_activities",
                 "dashboard_daily_snapshots",
                 "dashboard_hourly_sales",
@@ -143,6 +148,37 @@ class FreshDatabaseTests(unittest.TestCase):
             any(foreign_key["referred_table"] == "users" for foreign_key in audio_foreign_keys)
         )
         self.assertIn(("owner_id", "created_at"), audio_indexes)
+        self.assertTrue(
+            {
+                "english_transcript",
+                "detected_language_code",
+                "audio_container",
+                "audio_codec",
+                "audio_duration_seconds",
+                "transcription_strategy",
+                "provider_job_id",
+                "provider_job_state",
+                "sarvam_model",
+                "sarvam_request_id",
+                "sarvam_job_id",
+                "sarvam_estimated_cost_inr",
+                "openai_input_tokens",
+                "openai_cached_input_tokens",
+                "openai_output_tokens",
+                "openai_total_tokens",
+                "openai_model",
+                "openai_request_id",
+                "openai_request_ids",
+                "openai_estimated_cost_usd",
+                "total_estimated_cost",
+                "processing_stage",
+                "failure_stage",
+                "failure_code",
+                "failure_message",
+                "retryable",
+                "processed_at",
+            }.issubset(audio_columns)
+        )
         self.assertEqual(
             {foreign_key["referred_table"] for foreign_key in membership_foreign_keys},
             {"users", "workspaces"},
@@ -151,7 +187,17 @@ class FreshDatabaseTests(unittest.TestCase):
         self.assertIn("workspace_id", location_columns)
         self.assertIn("location_id", snapshot_columns)
         self.assertIn("location_id", activity_columns)
-        self.assertEqual(version, "20260803_05")
+        self.assertIn("audio_upload_id", activity_columns)
+        self.assertTrue(
+            any(foreign_key["referred_table"] == "workspaces" for foreign_key in audio_foreign_keys)
+        )
+        self.assertTrue(
+            any(
+                foreign_key["referred_table"] == "report_locations"
+                for foreign_key in audio_foreign_keys
+            )
+        )
+        self.assertEqual(version, "20260814_10")
 
 
 class PreMigrationDatabaseTests(unittest.TestCase):
@@ -207,6 +253,7 @@ class PreMigrationDatabaseTests(unittest.TestCase):
         self.assertIn("report_locations", tables)
         self.assertIn("report_daily_sales", tables)
         self.assertIn("audio_uploads", tables)
+        self.assertIn("audio_operations_reports", tables)
         self.assertIn("workspaces", tables)
         self.assertIn("workspace_memberships", tables)
         self.assertIn("users", tables)
@@ -289,7 +336,7 @@ class CreateAllDatabaseAdoptionTests(unittest.TestCase):
         self.assertEqual(str(session_row.id), refresh_session_id.hex)
         self.assertEqual(str(session_row.user_id), user_id.hex)
         self.assertEqual(session_row.token_hash, original_token_hash)
-        self.assertEqual(version, "20260803_05")
+        self.assertEqual(version, "20260814_10")
 
     @staticmethod
     async def _create_existing_database(

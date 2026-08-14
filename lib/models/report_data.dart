@@ -1,3 +1,5 @@
+import 'audio_api_cost.dart';
+
 class ReportData {
   const ReportData({
     required this.startDate,
@@ -8,6 +10,7 @@ class ReportData {
     required this.channelSplit,
     required this.revenueTrend,
     required this.locationPerformance,
+    required this.audioReports,
   });
 
   final DateTime startDate;
@@ -18,11 +21,14 @@ class ReportData {
   final List<ReportChannel> channelSplit;
   final List<ReportTrendPoint> revenueTrend;
   final List<ReportLocationPerformance> locationPerformance;
+  final List<AudioOperationsReport> audioReports;
 
-  bool get hasData =>
+  bool get hasSalesData =>
       channelSplit.isNotEmpty ||
       revenueTrend.isNotEmpty ||
       locationPerformance.isNotEmpty;
+
+  bool get hasData => hasSalesData || audioReports.isNotEmpty;
 
   factory ReportData.fromJson(Map<String, dynamic> json) {
     return ReportData(
@@ -56,6 +62,78 @@ class ReportData {
             ),
           )
           .toList(growable: false),
+      audioReports: _listValue(json, 'audio_reports')
+          .map(
+            (item) => AudioOperationsReport.fromJson(
+              _mapValue(item, 'audio_reports item'),
+            ),
+          )
+          .toList(growable: false),
+    );
+  }
+}
+
+class AudioOperationsReport {
+  const AudioOperationsReport({
+    required this.id,
+    required this.uploadId,
+    required this.workspaceId,
+    required this.locationId,
+    required this.locationName,
+    this.originalFilename,
+    this.mediaType,
+    this.sourceLanguage,
+    this.detectedLanguage,
+    required this.transcript,
+    required this.summary,
+    required this.category,
+    required this.severity,
+    required this.requiresAttention,
+    required this.recommendedAction,
+    required this.source,
+    required this.processedAt,
+    this.apiCost = const AudioApiCost(),
+  });
+
+  final String id;
+  final String uploadId;
+  final String workspaceId;
+  final String locationId;
+  final String locationName;
+  final String? originalFilename;
+  final String? mediaType;
+  final String? sourceLanguage;
+  final String? detectedLanguage;
+  final String transcript;
+  final String summary;
+  final String category;
+  final String severity;
+  final bool requiresAttention;
+  final String recommendedAction;
+  final String source;
+  final DateTime processedAt;
+  final AudioApiCost apiCost;
+
+  factory AudioOperationsReport.fromJson(Map<String, dynamic> json) {
+    return AudioOperationsReport(
+      id: _stringValue(json, 'id'),
+      uploadId: _stringValue(json, 'upload_id'),
+      workspaceId: _stringValue(json, 'workspace_id'),
+      locationId: _stringValue(json, 'location_id'),
+      locationName: _stringValue(json, 'location_name'),
+      originalFilename: _nullableStringValue(json, 'original_filename'),
+      mediaType: _nullableStringValue(json, 'media_type'),
+      sourceLanguage: _nullableStringValue(json, 'source_language'),
+      detectedLanguage: _nullableStringValue(json, 'detected_language'),
+      transcript: _stringValue(json, 'transcript'),
+      summary: _stringValue(json, 'summary'),
+      category: _stringValue(json, 'category'),
+      severity: _stringValue(json, 'severity'),
+      requiresAttention: _boolValue(json, 'requires_attention'),
+      recommendedAction: _stringValue(json, 'recommended_action'),
+      source: _stringValue(json, 'source'),
+      processedAt: DateTime.parse(_stringValue(json, 'processed_at')),
+      apiCost: AudioApiCost.fromJson(json),
     );
   }
 }
@@ -205,6 +283,12 @@ String? _nullableStringValue(Map<String, dynamic> json, String field) {
 int _intValue(Map<String, dynamic> json, String field) {
   final value = json[field];
   if (value is num) return value.toInt();
+  throw FormatException('Invalid $field response.');
+}
+
+bool _boolValue(Map<String, dynamic> json, String field) {
+  final value = json[field];
+  if (value is bool) return value;
   throw FormatException('Invalid $field response.');
 }
 

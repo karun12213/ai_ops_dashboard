@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../providers/auth_provider.dart';
 import '../screens/audio_upload_screen.dart';
+import '../screens/cost_analytics_screen.dart';
 import '../screens/dashboard_screen.dart';
 import '../screens/login_screen.dart';
 import '../screens/reports_screen.dart';
@@ -14,6 +15,7 @@ abstract final class AppRoutes {
   static const login = '/login';
   static const dashboard = '/dashboard';
   static const reports = '/reports';
+  static const costAnalytics = '/cost-analytics';
   static const audioUpload = '/audio-upload';
   static const settings = '/settings';
 }
@@ -43,7 +45,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(
             path: AppRoutes.reports,
-            builder: (context, state) => const ReportsScreen(),
+            builder: (context, state) => ReportsScreen(
+              initialReportId: state.uri.queryParameters['report_id'],
+            ),
+          ),
+          GoRoute(
+            path: AppRoutes.costAnalytics,
+            builder: (context, state) => const CostAnalyticsScreen(),
           ),
           GoRoute(
             path: AppRoutes.audioUpload,

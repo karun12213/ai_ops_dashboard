@@ -69,6 +69,7 @@ class LocalAudioStorageTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertFalse(temporary_path.exists())
         self.assertTrue(await self.storage.exists(self.key))
+        self.assertEqual(self.storage.get_path(self.key), (self.root / self.key).resolve())
         chunks = [chunk async for chunk in self.storage.iter_bytes(self.key, chunk_size=3)]
         self.assertEqual(b"".join(chunks), b"ID3payload")
         await self.storage.delete(self.key)
@@ -91,6 +92,8 @@ class LocalAudioStorageTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(key=key):
                 with self.assertRaises(InvalidStorageKeyError):
                     await self.storage.exists(key)
+                with self.assertRaises(InvalidStorageKeyError):
+                    self.storage.get_path(key)
 
 
 if __name__ == "__main__":

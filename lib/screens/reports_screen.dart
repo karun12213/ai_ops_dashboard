@@ -6,10 +6,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../models/report_data.dart';
 import '../providers/report_provider.dart';
 import '../providers/workspace_provider.dart';
+import '../widgets/api_cost_report_card.dart';
 import '../widgets/page_header.dart';
 
 class ReportsScreen extends ConsumerStatefulWidget {
-  const ReportsScreen({super.key});
+  const ReportsScreen({super.key, this.initialReportId});
+
+  final String? initialReportId;
 
   @override
   ConsumerState<ReportsScreen> createState() => _ReportsScreenState();
@@ -17,6 +20,7 @@ class ReportsScreen extends ConsumerStatefulWidget {
 
 class _ReportsScreenState extends ConsumerState<ReportsScreen> {
   bool _isExporting = false;
+  final Set<String> _downloadingPdfIds = <String>{};
 
   @override
   Widget build(BuildContext context) {
@@ -62,7 +66,13 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
               loading: () => const _ReportsLoading(),
               error: (_, _) => _ReportsError(onRetry: _refresh),
               data: (data) => data.hasData
-                  ? _ReportContent(data: data, filter: filter)
+                  ? _ReportContent(
+                      data: data,
+                      filter: filter,
+                      selectedReportId: widget.initialReportId,
+                      downloadingPdfIds: _downloadingPdfIds,
+                      onDownloadPdf: _downloadAudioPdf,
+                    )
                   : const _ReportsEmpty(),
             ),
           ],
@@ -121,6 +131,28 @@ class _ReportsScreenState extends ConsumerState<ReportsScreen> {
       );
     } finally {
       if (mounted) setState(() => _isExporting = false);
+    }
+  }
+
+  Future<void> _downloadAudioPdf(AudioOperationsReport report) async {
+    if (_downloadingPdfIds.contains(report.id)) return;
+    setState(() => _downloadingPdfIds.add(report.id));
+    try {
+      final export = await ref
+          .read(reportServiceProvider)
+          .exportAudioPdf(reportId: report.id);
+      await ref.read(pdfExportSaverProvider).save(export);
+      if (!mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('PDF report downloaded.')));
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('PDF download failed. Please try again.')),
+      );
+    } finally {
+      if (mounted) setState(() => _downloadingPdfIds.remove(report.id));
     }
   }
 }
@@ -240,41 +272,257 @@ class _ReportFilters extends StatelessWidget {
 }
 
 class _ReportContent extends StatelessWidget {
-  const _ReportContent({required this.data, required this.filter});
+  const _ReportContent({
+    required this.data,
+    required this.filter,
+    required this.downloadingPdfIds,
+    required this.onDownloadPdf,
+    this.selectedReportId,
+  });
 
   final ReportData data;
   final ReportFilter filter;
+  final Set<String> downloadingPdfIds;
+  final Future<void> Function(AudioOperationsReport report) onDownloadPdf;
+  final String? selectedReportId;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        _TotalsGrid(totals: data.totals),
-        const SizedBox(height: 16),
-        LayoutBuilder(
-          builder: (context, constraints) {
-            final stacked = constraints.maxWidth < 820;
-            final performance = _PerformanceCard(data: data, filter: filter);
-            final channels = _ChannelMixCard(channels: data.channelSplit);
-            if (stacked) {
-              return Column(
-                children: [performance, const SizedBox(height: 16), channels],
+        if (data.audioReports.isNotEmpty)
+          _AudioReportsSection(
+            reports: data.audioReports,
+            selectedReportId: selectedReportId,
+            downloadingPdfIds: downloadingPdfIds,
+            onDownloadPdf: onDownloadPdf,
+          ),
+        if (data.audioReports.isNotEmpty && data.hasSalesData)
+          const SizedBox(height: 16),
+        if (data.hasSalesData) _TotalsGrid(totals: data.totals),
+        if (data.hasSalesData) const SizedBox(height: 16),
+        if (data.hasSalesData)
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final stacked = constraints.maxWidth < 820;
+              final performance = _PerformanceCard(data: data, filter: filter);
+              final channels = _ChannelMixCard(channels: data.channelSplit);
+              if (stacked) {
+                return Column(
+                  children: [performance, const SizedBox(height: 16), channels],
+                );
+              }
+              return Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(flex: 2, child: performance),
+                  const SizedBox(width: 16),
+                  Expanded(child: channels),
+                ],
               );
-            }
-            return Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Expanded(flex: 2, child: performance),
-                const SizedBox(width: 16),
-                Expanded(child: channels),
-              ],
-            );
-          },
-        ),
-        const SizedBox(height: 16),
-        _LocationTable(rows: data.locationPerformance),
+            },
+          ),
+        if (data.hasSalesData) const SizedBox(height: 16),
+        if (data.hasSalesData) _LocationTable(rows: data.locationPerformance),
       ],
+    );
+  }
+}
+
+class _AudioReportsSection extends StatelessWidget {
+  const _AudioReportsSection({
+    required this.reports,
+    required this.selectedReportId,
+    required this.downloadingPdfIds,
+    required this.onDownloadPdf,
+  });
+
+  final List<AudioOperationsReport> reports;
+  final String? selectedReportId;
+  final Set<String> downloadingPdfIds;
+  final Future<void> Function(AudioOperationsReport report) onDownloadPdf;
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      key: const Key('audio-generated-reports'),
+      child: Padding(
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(
+              'AI Audio Reports',
+              style: Theme.of(
+                context,
+              ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Operational reports generated from translated recordings.',
+              style: TextStyle(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+            const SizedBox(height: 12),
+            for (final report in reports)
+              _AudioReportTile(
+                key: Key('audio-report-${report.id}'),
+                report: report,
+                initiallyExpanded:
+                    report.id == selectedReportId || report.requiresAttention,
+                isDownloadingPdf: downloadingPdfIds.contains(report.id),
+                onDownloadPdf: () => onDownloadPdf(report),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AudioReportTile extends StatelessWidget {
+  const _AudioReportTile({
+    super.key,
+    required this.report,
+    required this.initiallyExpanded,
+    required this.isDownloadingPdf,
+    required this.onDownloadPdf,
+  });
+
+  final AudioOperationsReport report;
+  final bool initiallyExpanded;
+  final bool isDownloadingPdf;
+  final Future<void> Function() onDownloadPdf;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(top: 10),
+      decoration: BoxDecoration(
+        border: Border.all(color: scheme.outlineVariant),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: ExpansionTile(
+        initiallyExpanded: initiallyExpanded,
+        leading: CircleAvatar(
+          backgroundColor: report.requiresAttention
+              ? scheme.errorContainer
+              : scheme.primaryContainer,
+          child: Icon(
+            report.requiresAttention
+                ? Icons.notification_important_outlined
+                : Icons.auto_awesome_outlined,
+            color: report.requiresAttention
+                ? scheme.onErrorContainer
+                : scheme.onPrimaryContainer,
+          ),
+        ),
+        title: Text(
+          report.summary,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+          style: const TextStyle(fontWeight: FontWeight.w700),
+        ),
+        subtitle: Text(
+          '${report.locationName} · ${_titleCase(report.severity)} severity · ${_formatReportDateTime(report.processedAt)}',
+        ),
+        childrenPadding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+        expandedCrossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          const Divider(),
+          const SizedBox(height: 8),
+          const Text(
+            'English Transcript',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 6),
+          SelectableText(report.transcript),
+          const SizedBox(height: 18),
+          _AudioReportField(
+            label: 'Category',
+            value: _titleCase(report.category),
+          ),
+          _AudioReportField(
+            label: 'Severity',
+            value: _titleCase(report.severity),
+          ),
+          _AudioReportField(
+            label: 'Requires attention',
+            value: report.requiresAttention ? 'Yes' : 'No',
+          ),
+          _AudioReportField(
+            label: 'Recommended action',
+            value: report.recommendedAction,
+          ),
+          _AudioReportField(label: 'Source', value: report.source),
+          if (report.originalFilename != null)
+            _AudioReportField(
+              label: 'Original audio',
+              value: report.originalFilename!,
+            ),
+          if (report.sourceLanguage != null)
+            _AudioReportField(
+              label: 'Selected language',
+              value: report.sourceLanguage == 'unknown'
+                  ? 'Auto detect'
+                  : report.sourceLanguage!,
+            ),
+          if (report.detectedLanguage != null)
+            _AudioReportField(
+              label: 'Detected language',
+              value: report.detectedLanguage!,
+            ),
+          _AudioReportField(
+            label: 'Processed',
+            value: _formatReportDateTime(report.processedAt),
+          ),
+          const SizedBox(height: 10),
+          ApiCostReportCard(
+            key: Key('audio-report-api-cost-report-${report.id}'),
+            cost: report.apiCost,
+          ),
+          const SizedBox(height: 16),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: FilledButton.icon(
+              key: Key('audio-report-pdf-${report.id}'),
+              onPressed: isDownloadingPdf ? null : onDownloadPdf,
+              icon: isDownloadingPdf
+                  ? const SizedBox.square(
+                      dimension: 17,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.picture_as_pdf_outlined),
+              label: Text(isDownloadingPdf ? 'Preparing PDF…' : 'Download PDF'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _AudioReportField extends StatelessWidget {
+  const _AudioReportField({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 4,
+        children: [
+          Text('$label:', style: const TextStyle(fontWeight: FontWeight.w700)),
+          SelectableText(value),
+        ],
+      ),
     );
   }
 }
@@ -868,4 +1116,17 @@ String _shortDate(DateTime value) {
     'Dec',
   ];
   return '${months[value.month - 1]} ${value.day}';
+}
+
+String _formatReportDateTime(DateTime value) {
+  final local = value.toLocal();
+  final hour = local.hour % 12 == 0 ? 12 : local.hour % 12;
+  final minute = local.minute.toString().padLeft(2, '0');
+  final period = local.hour < 12 ? 'AM' : 'PM';
+  return '${_shortDate(local)}, ${local.year} $hour:$minute $period';
+}
+
+String _titleCase(String value) {
+  if (value.isEmpty) return value;
+  return '${value[0].toUpperCase()}${value.substring(1)}';
 }

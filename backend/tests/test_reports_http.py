@@ -9,13 +9,15 @@ from typing import AsyncIterator
 from unittest.mock import patch
 
 from httpx import ASGITransport, AsyncClient
+from pypdf import PdfReader
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from backend.auth.security import create_access_token, hash_password
 from backend.database.base import Base
 from backend.database.session import get_db
 from backend.main import app
-from backend.models.report import ReportDailySales, ReportLocation
+from backend.models.audio_upload import AudioUpload
+from backend.models.report import AudioOperationsReport, ReportDailySales, ReportLocation
 from backend.models.user import User
 from backend.models.workspace import Workspace, WorkspaceMembership
 
@@ -125,6 +127,7 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
                 "channel_split": [],
                 "revenue_trend": [],
                 "location_performance": [],
+                "audio_reports": [],
             },
         )
 
@@ -449,6 +452,107 @@ class ReportsHttpTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 413)
         self.assertEqual(response.json()["detail"], "CSV export exceeds the 10000 row limit")
+
+    async def test_audio_report_pdf_is_authenticated_authorized_and_readable(self) -> None:
+        report_id = await self._seed_audio_report()
+        path = f"/api/v1/reports/{report_id}/pdf"
+
+        unauthenticated = await self.client.get(path)
+        allowed = await self.client.get(path, headers=self.headers)
+        denied = await self.client.get(path, headers=self.other_headers)
+        missing = await self.client.get(
+            f"/api/v1/reports/{uuid.uuid4()}/pdf",
+            headers=self.headers,
+        )
+
+        self.assertEqual(unauthenticated.status_code, 401)
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(allowed.headers["content-type"], "application/pdf")
+        self.assertEqual(allowed.headers["cache-control"], "no-store")
+        self.assertIn("attachment; filename=", allowed.headers["content-disposition"])
+        self.assertTrue(allowed.content.startswith(b"%PDF-"))
+        self.assertGreater(len(allowed.content), 2000)
+        extracted = "\n".join(
+            page.extract_text() or "" for page in PdfReader(io.BytesIO(allowed.content)).pages
+        )
+        for expected in (
+            "Restaurant Ops - AI Audio Report",
+            "English Transcript",
+            "The prep station needs more clean containers.",
+            "Restock clean containers before dinner service.",
+            "AI Audio Monitor",
+            "shift-note.ogg",
+        ):
+            self.assertIn(expected, extracted)
+        self.assertNotIn("storage/audio/private", extracted)
+        self.assertEqual(denied.status_code, 403)
+        self.assertEqual(missing.status_code, 404)
+
+    async def test_long_audio_report_pdf_wraps_across_multiple_pages(self) -> None:
+        transcript = " ".join(
+            f"Sentence {index} records a restaurant operations observation."
+            for index in range(1, 450)
+        )
+        report_id = await self._seed_audio_report(transcript=transcript)
+        response = await self.client.get(
+            f"/api/v1/reports/{report_id}/pdf",
+            headers=self.headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        reader = PdfReader(io.BytesIO(response.content))
+        self.assertGreater(len(reader.pages), 2)
+        self.assertIn("Page 1", reader.pages[0].extract_text())
+        self.assertIn(f"Page {len(reader.pages)}", reader.pages[-1].extract_text())
+        self.assertIn("Sentence 449", reader.pages[-2].extract_text() + reader.pages[-1].extract_text())
+
+    async def _seed_audio_report(self, *, transcript: str | None = None) -> uuid.UUID:
+        async with self.session_factory() as session:
+            location = ReportLocation(
+                workspace_id=self.workspace.id,
+                name=f"PDF Location {uuid.uuid4().hex[:6]}",
+                currency_code="INR",
+            )
+            session.add(location)
+            await session.flush()
+            upload = AudioUpload(
+                owner_id=self.user.id,
+                workspace_id=self.workspace.id,
+                location_id=location.id,
+                language_code="unknown",
+                detected_language_code="en-IN",
+                english_transcript=transcript
+                or "The prep station needs more clean containers.",
+                processing_stage="completed",
+                retryable=False,
+                original_filename="shift-note.ogg",
+                storage_key=f"storage/audio/private/{uuid.uuid4()}.ogg",
+                media_type="audio/ogg",
+                extension="ogg",
+                size_bytes=4096,
+                sha256=uuid.uuid4().hex + uuid.uuid4().hex,
+                status="ready",
+                scan_status="clean",
+            )
+            session.add(upload)
+            await session.flush()
+            report = AudioOperationsReport(
+                upload_id=upload.id,
+                owner_id=self.user.id,
+                workspace_id=self.workspace.id,
+                location_id=location.id,
+                transcript=upload.english_transcript,
+                summary="Restock clean containers before dinner service.",
+                category="inventory",
+                severity="high",
+                requires_attention=True,
+                recommended_action="Move sanitized containers to the prep station now.",
+                source="AI Audio Monitor",
+            )
+            session.add(report)
+            await session.commit()
+            await session.refresh(report)
+            return report.id
 
     async def _seed_performance_data(self) -> tuple[uuid.UUID, uuid.UUID]:
         async with self.session_factory() as session:

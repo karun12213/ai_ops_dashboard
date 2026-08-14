@@ -1,12 +1,14 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:ai_ops_dashboard/models/audio_api_cost.dart';
 import 'package:ai_ops_dashboard/models/report_data.dart';
 import 'package:ai_ops_dashboard/models/workspace_context.dart';
 import 'package:ai_ops_dashboard/providers/report_provider.dart';
 import 'package:ai_ops_dashboard/providers/workspace_provider.dart';
 import 'package:ai_ops_dashboard/screens/reports_screen.dart';
 import 'package:ai_ops_dashboard/services/csv_export_saver.dart';
+import 'package:ai_ops_dashboard/services/pdf_export_saver.dart';
 import 'package:ai_ops_dashboard/services/report_service.dart';
 import 'package:ai_ops_dashboard/services/workspace_service.dart';
 import 'package:flutter/material.dart';
@@ -100,6 +102,51 @@ void main() {
     expect(find.text('+12.8%'), findsOneWidget);
   });
 
+  testWidgets('renders an audio-generated report without sales aggregates', (
+    tester,
+  ) async {
+    await _pumpReports(
+      tester,
+      _FakeReportService(
+        onFetch: ({required startDate, required endDate, locationId}) async =>
+            _audioOnlyData,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('AI Audio Reports'), findsOneWidget);
+    expect(find.text('Restock the dinner station'), findsOneWidget);
+    expect(find.text('English Transcript'), findsOneWidget);
+    expect(find.text('The dinner station is low on plates.'), findsOneWidget);
+    expect(find.text('AI Audio Monitor'), findsOneWidget);
+    expect(find.text('API Cost Report'), findsOneWidget);
+    expect(find.text('Audio Duration:'), findsOneWidget);
+    expect(find.text('2.0 seconds'), findsOneWidget);
+    expect(find.text('Sarvam: ₹0.02'), findsOneWidget);
+    expect(find.text(r'OpenAI: $0.0005'), findsOneWidget);
+    expect(find.text('Cost per recorded minute:'), findsOneWidget);
+    expect(find.text('Estimated cost per recorded hour:'), findsOneWidget);
+    expect(find.text('Revenue total'), findsNothing);
+  });
+
+  testWidgets('shows an unavailable message for a historical unmetered audio', (
+    tester,
+  ) async {
+    await _pumpReports(
+      tester,
+      _FakeReportService(
+        onFetch: ({required startDate, required endDate, locationId}) async =>
+            _unmeteredAudioOnlyData,
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('API Cost Report'), findsOneWidget);
+    expect(find.text('Cost data unavailable for this upload.'), findsOneWidget);
+    expect(find.text('Sarvam: ₹0'), findsNothing);
+    expect(find.text(r'OpenAI: $0'), findsNothing);
+  });
+
   testWidgets('location and period filters issue new scoped requests', (
     tester,
   ) async {
@@ -178,6 +225,35 @@ void main() {
     expect(saver.saved?.bytes, [1, 2, 3]);
     expect(find.text('CSV export completed.'), findsOneWidget);
   });
+
+  testWidgets('downloads the selected audio AI report as PDF', (tester) async {
+    final saver = _FakePdfExportSaver();
+    String? exportedReportId;
+    final service = _FakeReportService(
+      onFetch: ({required startDate, required endDate, locationId}) async =>
+          _audioOnlyData,
+      onPdfExport: (reportId) async {
+        exportedReportId = reportId;
+        return ReportExport(
+          bytes: Uint8List.fromList([0x25, 0x50, 0x44, 0x46]),
+          filename: 'audio-report.pdf',
+        );
+      },
+    );
+    await _pumpReports(tester, service, pdfSaver: saver);
+    await tester.pumpAndSettle();
+
+    final downloadButton = find.byKey(const Key('audio-report-pdf-report-1'));
+    await tester.ensureVisible(downloadButton);
+    await tester.pumpAndSettle();
+    await tester.tap(downloadButton);
+    await tester.pumpAndSettle();
+
+    expect(exportedReportId, 'report-1');
+    expect(saver.saved?.filename, 'audio-report.pdf');
+    expect(saver.saved?.bytes, [0x25, 0x50, 0x44, 0x46]);
+    expect(find.text('PDF report downloaded.'), findsOneWidget);
+  });
 }
 
 typedef _FetchCallback =
@@ -195,10 +271,11 @@ typedef _ExportCallback =
     });
 
 class _FakeReportService implements ReportService {
-  _FakeReportService({required this.onFetch, this.onExport});
+  _FakeReportService({required this.onFetch, this.onExport, this.onPdfExport});
 
   final _FetchCallback onFetch;
   final _ExportCallback? onExport;
+  final Future<ReportExport> Function(String reportId)? onPdfExport;
 
   @override
   Future<ReportData> fetch({
@@ -229,9 +306,25 @@ class _FakeReportService implements ReportService {
       locationId: locationId,
     );
   }
+
+  @override
+  Future<ReportExport> exportAudioPdf({required String reportId}) {
+    final callback = onPdfExport;
+    if (callback == null) throw StateError('PDF export should not be called.');
+    return callback(reportId);
+  }
 }
 
 class _FakeCsvExportSaver implements CsvExportSaver {
+  ReportExport? saved;
+
+  @override
+  Future<void> save(ReportExport export) async {
+    saved = export;
+  }
+}
+
+class _FakePdfExportSaver implements PdfExportSaver {
   ReportExport? saved;
 
   @override
@@ -256,6 +349,7 @@ Future<void> _pumpReports(
   WidgetTester tester,
   ReportService service, {
   CsvExportSaver? saver,
+  PdfExportSaver? pdfSaver,
 }) async {
   tester.view.physicalSize = const Size(1400, 1000);
   tester.view.devicePixelRatio = 1;
@@ -275,6 +369,8 @@ Future<void> _pumpReports(
         reportTodayProvider.overrideWithValue(DateTime(2026, 8, 3)),
         reportServiceProvider.overrideWithValue(service),
         if (saver != null) csvExportSaverProvider.overrideWithValue(saver),
+        if (pdfSaver != null)
+          pdfExportSaverProvider.overrideWithValue(pdfSaver),
       ],
       child: const MaterialApp(home: Scaffold(body: ReportsScreen())),
     ),
@@ -333,6 +429,7 @@ final _emptyData = ReportData(
   channelSplit: const [],
   revenueTrend: const [],
   locationPerformance: const [],
+  audioReports: const [],
 );
 
 final _populatedData = ReportData(
@@ -375,6 +472,85 @@ final _populatedData = ReportData(
       orderTotal: 4,
       averageTicketMinor: 2550,
       revenueGrowthPercent: 12.8,
+    ),
+  ],
+  audioReports: const [],
+);
+
+final _audioOnlyData = ReportData(
+  startDate: DateTime(2026, 7, 5),
+  endDate: DateTime(2026, 8, 3),
+  locationId: null,
+  locations: const [ReportLocation(id: _locationId, name: 'Bandra')],
+  totals: const ReportTotals(
+    currencyCode: 'INR',
+    revenueTotalMinor: 0,
+    orderTotal: 0,
+    averageTicketMinor: 0,
+  ),
+  channelSplit: const [],
+  revenueTrend: const [],
+  locationPerformance: const [],
+  audioReports: [
+    AudioOperationsReport(
+      id: 'report-1',
+      uploadId: 'upload-1',
+      workspaceId: 'workspace-1',
+      locationId: _locationId,
+      locationName: 'Bandra',
+      transcript: 'The dinner station is low on plates.',
+      summary: 'Restock the dinner station',
+      category: 'inventory',
+      severity: 'high',
+      requiresAttention: true,
+      recommendedAction: 'Move clean plates to the station.',
+      source: 'AI Audio Monitor',
+      processedAt: _augustThird,
+      apiCost: AudioApiCost(
+        audioDurationSeconds: 2,
+        sarvamModel: 'saaras:v3',
+        sarvamEstimatedCostInr: 0.01666667,
+        openaiModel: 'gpt-4o-2024-11-20',
+        openaiInputTokens: 150,
+        openaiCachedInputTokens: 20,
+        openaiOutputTokens: 15,
+        openaiTotalTokens: 165,
+        openaiEstimatedCostUsd: 0.0005,
+        totalEstimatedCost: {'INR': 0.01666667, 'USD': 0.0005},
+      ),
+    ),
+  ],
+);
+
+final _unmeteredAudioOnlyData = ReportData(
+  startDate: DateTime(2026, 7, 5),
+  endDate: DateTime(2026, 8, 3),
+  locationId: null,
+  locations: const [ReportLocation(id: _locationId, name: 'Bandra')],
+  totals: const ReportTotals(
+    currencyCode: 'INR',
+    revenueTotalMinor: 0,
+    orderTotal: 0,
+    averageTicketMinor: 0,
+  ),
+  channelSplit: const [],
+  revenueTrend: const [],
+  locationPerformance: const [],
+  audioReports: [
+    AudioOperationsReport(
+      id: 'report-old',
+      uploadId: 'upload-old',
+      workspaceId: 'workspace-1',
+      locationId: _locationId,
+      locationName: 'Bandra',
+      transcript: 'Historical transcript.',
+      summary: 'Historical report without metering',
+      category: 'operations',
+      severity: 'low',
+      requiresAttention: true,
+      recommendedAction: 'No action required.',
+      source: 'AI Audio Monitor',
+      processedAt: _augustSecond,
     ),
   ],
 );

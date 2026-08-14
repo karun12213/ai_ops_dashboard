@@ -20,6 +20,10 @@ class WorkspaceNotFoundError(LookupError):
     pass
 
 
+class WorkspaceAccessDeniedError(PermissionError):
+    pass
+
+
 class WorkspaceMemberUserNotFoundError(LookupError):
     pass
 
@@ -226,6 +230,28 @@ class WorkspaceService:
         )
         if location is None:
             raise WorkspaceNotFoundError
+        return location
+
+    async def require_accessible_location(
+        self,
+        *,
+        user_id: uuid.UUID,
+        location_id: uuid.UUID,
+    ) -> ReportLocation:
+        """Distinguish a missing location from a real authorization denial."""
+        location = await self._session.get(ReportLocation, location_id)
+        if location is None:
+            raise WorkspaceNotFoundError
+        if location.workspace_id is None:
+            raise WorkspaceAccessDeniedError
+        membership = await self._session.scalar(
+            select(WorkspaceMembership).where(
+                WorkspaceMembership.workspace_id == location.workspace_id,
+                WorkspaceMembership.user_id == user_id,
+            )
+        )
+        if membership is None:
+            raise WorkspaceAccessDeniedError
         return location
 
     @staticmethod
