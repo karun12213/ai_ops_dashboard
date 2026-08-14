@@ -1,4 +1,21 @@
-FROM instrumentisto/flutter:3.41.6 AS build
+FROM debian:bookworm-slim AS build
+
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    unzip \
+    xz-utils \
+    zip \
+    ca-certificates \
+    libglu1-mesa \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch 3.44.8 https://github.com/flutter/flutter.git /opt/flutter
+
+ENV PATH="/opt/flutter/bin:/opt/flutter/bin/cache/dart-sdk/bin:${PATH}"
+
+RUN flutter --version
+RUN flutter config --enable-web
 
 WORKDIR /app
 
